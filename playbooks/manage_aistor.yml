@@ -1,0 +1,43 @@
+---
+- name: Showcase declarative AIStor administration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aistor_admin_manage: "{{ lookup('ansible.builtin.env', 'AISTOR_MANAGE') | default('false', true) | bool }}"
+    aistor_admin_auth:
+      endpoint: "{{ lookup('ansible.builtin.env', 'AISTOR_ENDPOINT') }}"
+      access_key: "{{ lookup('ansible.builtin.env', 'AISTOR_ADMIN_ACCESS_KEY') }}"
+      secret_key: "{{ lookup('ansible.builtin.env', 'AISTOR_ADMIN_SECRET_KEY') }}"
+      secure: true
+      validate_certs: true
+    aistor_admin_policies:
+      - name: example-read
+        policy:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: ["s3:GetObject", "s3:ListBucket"]
+              Resource: ["arn:aws:s3:::example", "arn:aws:s3:::example/*"]
+    aistor_admin_users:
+      - access_key: example-user
+        secret_key: "{{ lookup('ansible.builtin.env', 'AISTOR_EXAMPLE_USER_SECRET') }}"
+        status: enabled
+    aistor_admin_groups:
+      - name: example-readers
+        members: [example-user]
+        purge_members: true
+    aistor_admin_service_accounts:
+      - access_key: example-service
+        secret_key: "{{ lookup('ansible.builtin.env', 'AISTOR_EXAMPLE_SERVICE_SECRET') }}"
+        name: Example automation
+    aistor_admin_policy_bindings:
+      - policies: [example-read]
+        group: example-readers
+      - policies: [example-read]
+        group: "cn=example-readers,ou=groups,dc=example,dc=com"
+        identity_provider: ldap
+    # Override this object only when two real, empty sites are ready.
+    aistor_admin_site_replication: {}
+  roles:
+    - role: captain.minio.aistor_admin

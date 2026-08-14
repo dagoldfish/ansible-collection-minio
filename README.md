@@ -33,32 +33,31 @@ auth:
 
 See the module documentation with `ansible-doc captain.minio.minio_user`.
 
-## Role example
+## Example playbook
 
 The role is disabled by default. Credentials should come from an environment or
 secret lookup and must never be committed to inventory.
 
-```yaml
-- name: Manage AIStor
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  roles:
-    - role: captain.minio.aistor_admin
-      vars:
-        aistor_admin_manage: true
-        aistor_admin_auth:
-          endpoint: aistor.example.com:9000
-          access_key: "{{ lookup('ansible.builtin.env', 'AISTOR_ADMIN_ACCESS_KEY') }}"
-          secret_key: "{{ lookup('ansible.builtin.env', 'AISTOR_ADMIN_SECRET_KEY') }}"
-          secure: true
-          validate_certs: true
-        aistor_admin_policies:
-          - name: archive-read
-            policy:
-              Version: "2012-10-17"
-              Statement: []
+The complete [`playbooks/manage_aistor.yml`](playbooks/manage_aistor.yml)
+example demonstrates every supported role resource. It is safe by default:
+the role does not contact AIStor unless `AISTOR_MANAGE=true` is explicitly set.
+
+Preview it from the collection repository after exporting the required
+environment-backed credentials:
+
+```sh
+export AISTOR_ENDPOINT='<host>:9000'
+export AISTOR_ADMIN_ACCESS_KEY='<access-key>'
+export AISTOR_ADMIN_SECRET_KEY='<secret-key>'
+export AISTOR_EXAMPLE_USER_SECRET='<secret-key>'
+export AISTOR_EXAMPLE_SERVICE_SECRET='<secret-key>'
+export AISTOR_MANAGE=true
+ansible-playbook playbooks/manage_aistor.yml --check
 ```
+
+LDAP policy bindings cannot be previewed because the MinIO Python SDK does not
+provide LDAP association read-back. Remove the LDAP binding from a preview or
+run the reviewed configuration without `--check` when ready to apply it.
 
 ## Build for Galaxy
 
