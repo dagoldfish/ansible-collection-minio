@@ -1,3 +1,7 @@
+# Copyright: (c) 2026, Geoffrey Burger (@dagoldfish)
+# GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Unit tests for idempotency-critical module behavior."""
 
 from __future__ import annotations
@@ -7,7 +11,7 @@ import importlib
 import pytest
 from minio.error import MinioAdminException
 
-BASE = "ansible_collections.captain.minio.plugins.modules"
+BASE = "ansible_collections.dagoldfish.minio.plugins.modules"
 
 
 class ExitJson(Exception):
@@ -87,6 +91,11 @@ def test_user_create_and_absent_check_mode_do_not_mutate():
     assert result(mod.run, Module(create, True), client)["changed"] is True
     assert client.calls == []
 
+    create["state"] = "absent"
+    existing = Users()
+    assert result(mod.run, Module(create, True), existing)["changed"] is True
+    assert existing.calls == []
+
 
 def test_user_delete():
     mod = importlib.import_module(f"{BASE}.minio_user")
@@ -126,6 +135,20 @@ def test_group_membership_adds_and_purges():
     out = result(mod.run, Module(params), client)
     assert out["changed"] and out["group"]["members"] == ["alice", "bob"]
     assert client.calls == [("add", ["bob"]), ("remove", ["old"])]
+
+
+def test_group_check_mode_predicts_without_mutating():
+    mod = importlib.import_module(f"{BASE}.minio_group")
+    params = {
+        "name": "team",
+        "state": "present",
+        "members": ["alice", "bob"],
+        "purge_members": True,
+        "status": "enabled",
+    }
+    client = Groups()
+    assert result(mod.run, Module(params, True), client)["changed"] is True
+    assert client.calls == []
 
 
 def test_group_delete():
@@ -172,6 +195,18 @@ def test_policy_delete():
     assert client.calls == [("remove", "read")]
 
 
+def test_policy_check_mode_predicts_update_without_mutating():
+    mod = importlib.import_module(f"{BASE}.minio_policy")
+    params = {
+        "name": "read",
+        "policy": {"Version": "2012-10-17", "Statement": [{"Effect": "Allow"}]},
+        "policy_file": None,
+        "state": "present",
+    }
+    client = Policies()
+    assert result(mod.run, Module(params, True), client)["changed"] is True
+
+
 class Bindings:
     def get_policy_entities(self, *args):
         return {"userMappings": [{"user": "alice", "policies": ["read"]}]}
@@ -184,6 +219,18 @@ def test_builtin_binding_is_idempotent():
     mod = importlib.import_module(f"{BASE}.minio_policy_binding")
     params = {"policies": ["read"], "user": "alice", "group": None, "identity_provider": "builtin", "state": "present"}
     assert result(mod.run, Module(params), Bindings())["changed"] is False
+
+
+def test_builtin_binding_check_mode_predicts_without_mutating():
+    mod = importlib.import_module(f"{BASE}.minio_policy_binding")
+    params = {
+        "policies": ["write"],
+        "user": "alice",
+        "group": None,
+        "identity_provider": "builtin",
+        "state": "present",
+    }
+    assert result(mod.run, Module(params, True), Bindings())["changed"] is True
 
 
 def test_ldap_check_mode_fails_clearly():
@@ -289,8 +336,14 @@ def test_service_account_status_update_and_delete():
 
 
 class Replication:
+    def __init__(self):
+        self.calls = []
+
     def get_site_replication_info(self):
         return {"enabled": True, "sites": [{"name": "one"}]}
+
+    def remove_site_replication(self, **kwargs):
+        self.calls.append(kwargs)
 
 
 def test_replication_removal_requires_force():
@@ -298,6 +351,52 @@ def test_replication_removal_requires_force():
     params = {"sites": [{"name": "one"}], "state": "absent", "force": False, "remove_all": False}
     with pytest.raises(FailJson):
         mod.run(Module(params), Replication())
+
+
+def test_replication_removal_predicts_topology_in_check_mode():
+    mod = importlib.import_module(f"{BASE}.minio_site_replication")
+    params = {"sites": [{"name": "one"}], "state": "absent", "force": True, "remove_all": False}
+    client = Replication()
+    out = result(mod.run, Module(params, True), client)
+    assert out == {"changed": True, "site_replication": {"enabled": False, "sites": []}}
+    assert client.calls == []
+
+
+@pytest.mark.parametrize(
+    ("params", "message"),
+    [
+        (
+            {"sites": [{"name": "one"}, {"name": "one"}], "state": "present", "force": False, "remove_all": False},
+            "site names must be unique",
+        ),
+        (
+            {
+                "sites": [{"name": "one", "bandwidth_limit": -1}],
+                "state": "present",
+                "force": False,
+                "remove_all": False,
+            },
+            "bandwidth_limit cannot be negative",
+        ),
+        (
+            {"sites": [], "state": "present", "force": True, "remove_all": False},
+            "only valid when state=absent",
+        ),
+        (
+            {"sites": [{"name": "one"}], "state": "absent", "force": True, "remove_all": True},
+            "sites must be empty",
+        ),
+        (
+            {"sites": [], "state": "absent", "force": True, "remove_all": False},
+            "at least one name",
+        ),
+    ],
+)
+def test_replication_rejects_ambiguous_inputs(params, message):
+    mod = importlib.import_module(f"{BASE}.minio_site_replication")
+    with pytest.raises(FailJson) as caught:
+        mod.run(Module(params), Replication())
+    assert message in caught.value.args[0]["msg"]
 
 
 def test_replication_existing_topology_is_idempotent():
@@ -356,3 +455,56 @@ def test_replication_add_applies_requested_settings(monkeypatch):
     client = Client()
     assert result(mod.run, Module(params), client)["changed"] is True
     assert [call[0] for call in client.calls] == ["add", "edit"]
+
+
+def test_replication_add_check_mode_predicts_without_mutating():
+    mod = importlib.import_module(f"{BASE}.minio_site_replication")
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def get_site_replication_info(self):
+            return {"enabled": False, "sites": []}
+
+        def add_site_replication(self, peers):
+            self.calls.append(peers)
+
+    params = {
+        "sites": [
+            {
+                "name": "two",
+                "endpoint": "https://two",
+                "access_key": "admin",
+                "secret_key": "{{ test_secret }}",
+            }
+        ],
+        "state": "present",
+        "force": False,
+        "remove_all": False,
+    }
+    client = Client()
+    out = result(mod.run, Module(params, True), client)
+    assert out["changed"] is True
+    assert out["site_replication"]["sites"] == [{"name": "two", "endpoint": "https://two"}]
+    assert client.calls == []
+
+
+def test_replication_info_reads_optional_status(monkeypatch):
+    mod = importlib.import_module(f"{BASE}.minio_site_replication_info")
+    monkeypatch.setattr(mod, "SiteReplicationStatusOptions", lambda **kwargs: kwargs)
+
+    class Client:
+        def get_site_replication_info(self):
+            return '{"enabled": true, "sites": []}'
+
+        def get_site_replication_status(self, options):
+            assert all(options.values())
+            return '{"healthy": true}'
+
+    out = result(mod.run, Module({"include_status": True}), Client())
+    assert out == {
+        "changed": False,
+        "site_replication": {"enabled": True, "sites": []},
+        "status": {"healthy": True},
+    }

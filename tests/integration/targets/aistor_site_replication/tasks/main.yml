@@ -1,0 +1,55 @@
+---
+- name: Read site-replication integration settings
+  ansible.builtin.set_fact:
+    aistor_it_auth:
+      endpoint: "{{ lookup('ansible.builtin.env', 'AISTOR_IT_ENDPOINT') }}"
+      access_key: "{{ lookup('ansible.builtin.env', 'AISTOR_IT_ACCESS_KEY') }}"
+      secret_key: "{{ lookup('ansible.builtin.env', 'AISTOR_IT_SECRET_KEY') }}"
+      secure: "{{ lookup('ansible.builtin.env', 'AISTOR_IT_SECURE') | default('true', true) | bool }}"
+      validate_certs: "{{ lookup('ansible.builtin.env', 'AISTOR_IT_VALIDATE_CERTS') | default('true', true) | bool }}"
+    aistor_it_replication_sites: "{{ lookup('ansible.builtin.env', 'AISTOR_IT_REPLICATION_SITES_JSON') | from_json }}"
+    aistor_it_replication_ack: "{{ lookup('ansible.builtin.env', 'AISTOR_IT_ALLOW_REPLICATION_CHANGES') }}"
+  no_log: true
+
+- name: Require explicit disposable-site acknowledgement
+  ansible.builtin.assert:
+    that:
+      - aistor_it_auth.endpoint | length > 0
+      - aistor_it_auth.access_key | length > 0
+      - aistor_it_auth.secret_key | length > 0
+      - aistor_it_replication_sites | type_debug == 'list'
+      - aistor_it_replication_sites | length >= 2
+      - aistor_it_replication_ack == 'I-understand-this-removes-sites'
+    fail_msg: The replication target requires two or more disposable sites and the documented acknowledgement.
+  no_log: true
+
+- name: Exercise disposable site-replication lifecycle
+  block:
+    - name: Create or expand disposable site replication
+      dagoldfish.minio.minio_site_replication:
+        auth: "{{ aistor_it_auth }}"
+        sites: "{{ aistor_it_replication_sites }}"
+      register: aistor_it_replication_create
+      no_log: true
+
+    - name: Verify site-replication idempotency
+      dagoldfish.minio.minio_site_replication:
+        auth: "{{ aistor_it_auth }}"
+        sites: "{{ aistor_it_replication_sites }}"
+      register: aistor_it_replication_repeat
+      no_log: true
+
+    - name: Verify site-replication lifecycle
+      ansible.builtin.assert:
+        that:
+          - aistor_it_replication_create is changed
+          - aistor_it_replication_repeat is not changed
+  always:
+    - name: Remove only the disposable integration sites
+      dagoldfish.minio.minio_site_replication:
+        auth: "{{ aistor_it_auth }}"
+        sites: "{{ aistor_it_replication_sites }}"
+        state: absent
+        force: true
+      no_log: true
+      failed_when: false

@@ -1,6 +1,12 @@
+# Copyright: (c) 2026, Geoffrey Burger (@dagoldfish)
+# GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Shared MinIO Admin client construction and response helpers."""
 
-from __future__ import annotations
+from __future__ import absolute_import, division, print_function
+
+__metaclass__ = type
 
 import json
 import traceback
@@ -78,7 +84,13 @@ def canonical_json(value: Any) -> str:
 
 def fail_from_exception(module: Any, error: Exception) -> None:
     """Return an API failure without exposing request credentials."""
-    module.fail_json(msg=f"MinIO AIStor API request failed: {error}")
+    message = str(error)
+    auth = module.params.get("auth", {}) if isinstance(module.params, dict) else {}
+    for field in ("access_key", "secret_key"):
+        value = auth.get(field)
+        if value:
+            message = message.replace(str(value), "***")
+    module.fail_json(msg=f"MinIO AIStor API request failed: {message}")
 
 
 def is_not_found(error: Exception) -> bool:

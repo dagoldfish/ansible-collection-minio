@@ -1,7 +1,13 @@
 #!/usr/bin/python
+# Copyright: (c) 2026, Geoffrey Burger (@dagoldfish)
+# GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Read MinIO site-replication information."""
 
-from __future__ import annotations
+from __future__ import absolute_import, division, print_function
+
+__metaclass__ = type
 
 DOCUMENTATION = r"""
 ---
@@ -27,7 +33,7 @@ attributes:
   check_mode: {support: full, description: Performs only read operations in all modes.}
 """
 EXAMPLES = r"""
-- captain.minio.minio_site_replication_info:
+- dagoldfish.minio.minio_site_replication_info:
     auth: "{{ aistor_auth }}"
   register: replication
 """
@@ -36,7 +42,7 @@ site_replication: {description: Site-replication topology., returned: always, ty
 status: {description: Detailed status when requested., returned: when requested, type: dict}
 """
 from ansible.module_utils.basic import AnsibleModule
-from ansible_collections.captain.minio.plugins.module_utils.minio_admin import (
+from ansible_collections.dagoldfish.minio.plugins.module_utils.minio_admin import (
     SiteReplicationStatusOptions,
     admin_client,
     auth_argument_spec,

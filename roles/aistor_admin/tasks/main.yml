@@ -10,7 +10,7 @@
   no_log: true
 
 - name: Reconcile AIStor policies
-  captain.minio.minio_policy:
+  dagoldfish.minio.minio_policy:
     auth: "{{ aistor_admin_auth }}"
     name: "{{ item.name }}"
     policy: "{{ item.policy | default(omit) }}"
@@ -21,7 +21,7 @@
   when: aistor_admin_manage | bool
 
 - name: Reconcile AIStor users
-  captain.minio.minio_user:
+  dagoldfish.minio.minio_user:
     auth: "{{ aistor_admin_auth }}"
     access_key: "{{ item.access_key }}"
     secret_key: "{{ item.secret_key | default(omit) }}"
@@ -34,7 +34,7 @@
   no_log: true
 
 - name: Reconcile AIStor groups
-  captain.minio.minio_group:
+  dagoldfish.minio.minio_group:
     auth: "{{ aistor_admin_auth }}"
     name: "{{ item.name }}"
     members: "{{ item.members | default(omit) }}"
@@ -46,7 +46,7 @@
   when: aistor_admin_manage | bool
 
 - name: Reconcile AIStor service accounts
-  captain.minio.minio_service_account:
+  dagoldfish.minio.minio_service_account:
     auth: "{{ aistor_admin_auth }}"
     access_key: "{{ item.access_key }}"
     secret_key: "{{ item.secret_key | default(omit) }}"
@@ -63,7 +63,7 @@
   no_log: true
 
 - name: Reconcile AIStor policy bindings
-  captain.minio.minio_policy_binding:
+  dagoldfish.minio.minio_policy_binding:
     auth: "{{ aistor_admin_auth }}"
     policies: "{{ item.policies }}"
     user: "{{ item.user | default(omit) }}"
@@ -75,7 +75,7 @@
   when: aistor_admin_manage | bool
 
 - name: Reconcile AIStor site replication
-  captain.minio.minio_site_replication:
+  dagoldfish.minio.minio_site_replication:
     auth: "{{ aistor_admin_auth }}"
     sites: "{{ aistor_admin_site_replication.sites | default([]) }}"
     remove_all: "{{ aistor_admin_site_replication.remove_all | default(false) }}"

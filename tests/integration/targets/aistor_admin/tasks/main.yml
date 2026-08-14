@@ -1,0 +1,274 @@
+---
+- name: Read disposable AIStor integration settings
+  ansible.builtin.set_fact:
+    aistor_it_auth:
+      endpoint: "{{ lookup('ansible.builtin.env', 'AISTOR_IT_ENDPOINT') }}"
+      access_key: "{{ lookup('ansible.builtin.env', 'AISTOR_IT_ACCESS_KEY') }}"
+      secret_key: "{{ lookup('ansible.builtin.env', 'AISTOR_IT_SECRET_KEY') }}"
+      secure: "{{ lookup('ansible.builtin.env', 'AISTOR_IT_SECURE') | default('true', true) | bool }}"
+      validate_certs: "{{ lookup('ansible.builtin.env', 'AISTOR_IT_VALIDATE_CERTS') | default('true', true) | bool }}"
+    aistor_it_resource_secret: "{{ lookup('ansible.builtin.env', 'AISTOR_IT_RESOURCE_SECRET') }}"
+    aistor_it_suffix: "{{ 1000000000 | random }}"
+  no_log: true
+
+- name: Require disposable AIStor credentials
+  ansible.builtin.assert:
+    that:
+      - aistor_it_auth.endpoint | length > 0
+      - aistor_it_auth.access_key | length > 0
+      - aistor_it_auth.secret_key | length > 0
+      - aistor_it_resource_secret | length >= 8
+    fail_msg: Set AISTOR_IT_ENDPOINT, AISTOR_IT_ACCESS_KEY, AISTOR_IT_SECRET_KEY, and AISTOR_IT_RESOURCE_SECRET.
+  no_log: true
+
+- name: Define isolated integration resource names
+  ansible.builtin.set_fact:
+    aistor_it_policy: "ansible-it-{{ aistor_it_suffix }}"
+    aistor_it_user: "ansible-it-user-{{ aistor_it_suffix }}"
+    aistor_it_group: "ansible-it-group-{{ aistor_it_suffix }}"
+    aistor_it_service: "ansible-it-svc-{{ aistor_it_suffix }}"
+
+- name: Exercise AIStor IAM lifecycle
+  block:
+    - name: Create integration policy
+      dagoldfish.minio.minio_policy:
+        auth: "{{ aistor_it_auth }}"
+        name: "{{ aistor_it_policy }}"
+        policy:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: ["s3:ListAllMyBuckets"]
+              Resource: ["arn:aws:s3:::*"]
+      register: aistor_it_policy_create
+
+    - name: Verify policy creation and idempotency
+      block:
+        - name: Verify policy creation changed state
+          ansible.builtin.assert:
+            that: aistor_it_policy_create is changed
+        - name: Reapply integration policy
+          dagoldfish.minio.minio_policy:
+            auth: "{{ aistor_it_auth }}"
+            name: "{{ aistor_it_policy }}"
+            policy:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: ["s3:ListAllMyBuckets"]
+                  Resource: ["arn:aws:s3:::*"]
+          register: aistor_it_policy_repeat
+        - name: Verify repeated policy is unchanged
+          ansible.builtin.assert:
+            that: aistor_it_policy_repeat is not changed
+
+    - name: Update integration policy
+      dagoldfish.minio.minio_policy:
+        auth: "{{ aistor_it_auth }}"
+        name: "{{ aistor_it_policy }}"
+        policy:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: ["s3:GetBucketLocation"]
+              Resource: ["arn:aws:s3:::*"]
+      register: aistor_it_policy_update
+
+    - name: Create integration user
+      dagoldfish.minio.minio_user:
+        auth: "{{ aistor_it_auth }}"
+        access_key: "{{ aistor_it_user }}"
+        secret_key: "{{ aistor_it_resource_secret }}"
+      register: aistor_it_user_create
+      no_log: true
+
+    - name: Verify user idempotency
+      dagoldfish.minio.minio_user:
+        auth: "{{ aistor_it_auth }}"
+        access_key: "{{ aistor_it_user }}"
+        secret_key: "{{ aistor_it_resource_secret }}"
+      register: aistor_it_user_repeat
+      no_log: true
+
+    - name: Disable integration user
+      dagoldfish.minio.minio_user:
+        auth: "{{ aistor_it_auth }}"
+        access_key: "{{ aistor_it_user }}"
+        status: disabled
+      register: aistor_it_user_update
+
+    - name: Create integration group
+      dagoldfish.minio.minio_group:
+        auth: "{{ aistor_it_auth }}"
+        name: "{{ aistor_it_group }}"
+        members: ["{{ aistor_it_user }}"]
+        purge_members: true
+      register: aistor_it_group_create
+
+    - name: Verify group idempotency
+      dagoldfish.minio.minio_group:
+        auth: "{{ aistor_it_auth }}"
+        name: "{{ aistor_it_group }}"
+        members: ["{{ aistor_it_user }}"]
+        purge_members: true
+      register: aistor_it_group_repeat
+
+    - name: Update integration group status
+      dagoldfish.minio.minio_group:
+        auth: "{{ aistor_it_auth }}"
+        name: "{{ aistor_it_group }}"
+        status: disabled
+      register: aistor_it_group_update
+
+    - name: Create integration service account
+      dagoldfish.minio.minio_service_account:
+        auth: "{{ aistor_it_auth }}"
+        access_key: "{{ aistor_it_service }}"
+        secret_key: "{{ aistor_it_resource_secret }}"
+        name: Ansible integration account
+      register: aistor_it_service_create
+      no_log: true
+
+    - name: Verify service-account idempotency
+      dagoldfish.minio.minio_service_account:
+        auth: "{{ aistor_it_auth }}"
+        access_key: "{{ aistor_it_service }}"
+        secret_key: "{{ aistor_it_resource_secret }}"
+        name: Ansible integration account
+      register: aistor_it_service_repeat
+      no_log: true
+
+    - name: Update integration service account
+      dagoldfish.minio.minio_service_account:
+        auth: "{{ aistor_it_auth }}"
+        access_key: "{{ aistor_it_service }}"
+        description: Updated by the Ansible integration suite
+      register: aistor_it_service_update
+
+    - name: Attach integration policy
+      dagoldfish.minio.minio_policy_binding:
+        auth: "{{ aistor_it_auth }}"
+        policies: ["{{ aistor_it_policy }}"]
+        group: "{{ aistor_it_group }}"
+      register: aistor_it_binding_create
+
+    - name: Verify policy-binding idempotency
+      dagoldfish.minio.minio_policy_binding:
+        auth: "{{ aistor_it_auth }}"
+        policies: ["{{ aistor_it_policy }}"]
+        group: "{{ aistor_it_group }}"
+      register: aistor_it_binding_repeat
+
+    - name: Verify lifecycle changes
+      ansible.builtin.assert:
+        that:
+          - aistor_it_policy_update is changed
+          - aistor_it_user_create is changed
+          - aistor_it_user_repeat is not changed
+          - aistor_it_user_update is changed
+          - aistor_it_group_create is changed
+          - aistor_it_group_repeat is not changed
+          - aistor_it_group_update is changed
+          - aistor_it_service_create is changed
+          - aistor_it_service_repeat is not changed
+          - aistor_it_service_update is changed
+          - aistor_it_binding_create is changed
+          - aistor_it_binding_repeat is not changed
+
+    - name: Detach integration policy to exercise binding updates
+      dagoldfish.minio.minio_policy_binding:
+        auth: "{{ aistor_it_auth }}"
+        policies: ["{{ aistor_it_policy }}"]
+        group: "{{ aistor_it_group }}"
+        state: absent
+      register: aistor_it_binding_detach
+
+    - name: Reattach integration policy after update
+      dagoldfish.minio.minio_policy_binding:
+        auth: "{{ aistor_it_auth }}"
+        policies: ["{{ aistor_it_policy }}"]
+        group: "{{ aistor_it_group }}"
+      register: aistor_it_binding_reattach
+
+    - name: Delete integration binding
+      dagoldfish.minio.minio_policy_binding:
+        auth: "{{ aistor_it_auth }}"
+        policies: ["{{ aistor_it_policy }}"]
+        group: "{{ aistor_it_group }}"
+        state: absent
+      register: aistor_it_binding_delete
+
+    - name: Delete integration service account
+      dagoldfish.minio.minio_service_account:
+        auth: "{{ aistor_it_auth }}"
+        access_key: "{{ aistor_it_service }}"
+        state: absent
+      register: aistor_it_service_delete
+
+    - name: Delete integration group
+      dagoldfish.minio.minio_group:
+        auth: "{{ aistor_it_auth }}"
+        name: "{{ aistor_it_group }}"
+        state: absent
+      register: aistor_it_group_delete
+
+    - name: Delete integration user
+      dagoldfish.minio.minio_user:
+        auth: "{{ aistor_it_auth }}"
+        access_key: "{{ aistor_it_user }}"
+        state: absent
+      register: aistor_it_user_delete
+
+    - name: Delete integration policy
+      dagoldfish.minio.minio_policy:
+        auth: "{{ aistor_it_auth }}"
+        name: "{{ aistor_it_policy }}"
+        state: absent
+      register: aistor_it_policy_delete
+
+    - name: Verify update and deletion changes
+      ansible.builtin.assert:
+        that:
+          - aistor_it_binding_detach is changed
+          - aistor_it_binding_reattach is changed
+          - aistor_it_binding_delete is changed
+          - aistor_it_service_delete is changed
+          - aistor_it_group_delete is changed
+          - aistor_it_user_delete is changed
+          - aistor_it_policy_delete is changed
+  always:
+    - name: Detach integration policy
+      dagoldfish.minio.minio_policy_binding:
+        auth: "{{ aistor_it_auth }}"
+        policies: ["{{ aistor_it_policy }}"]
+        group: "{{ aistor_it_group }}"
+        state: absent
+      failed_when: false
+
+    - name: Remove integration service account
+      dagoldfish.minio.minio_service_account:
+        auth: "{{ aistor_it_auth }}"
+        access_key: "{{ aistor_it_service }}"
+        state: absent
+      failed_when: false
+
+    - name: Remove integration group
+      dagoldfish.minio.minio_group:
+        auth: "{{ aistor_it_auth }}"
+        name: "{{ aistor_it_group }}"
+        state: absent
+      failed_when: false
+
+    - name: Remove integration user
+      dagoldfish.minio.minio_user:
+        auth: "{{ aistor_it_auth }}"
+        access_key: "{{ aistor_it_user }}"
+        state: absent
+      failed_when: false
+
+    - name: Remove integration policy
+      dagoldfish.minio.minio_policy:
+        auth: "{{ aistor_it_auth }}"
+        name: "{{ aistor_it_policy }}"
+        state: absent
+      failed_when: false

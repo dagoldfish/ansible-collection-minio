@@ -1,5 +1,8 @@
 __pycache__/
 *.py[cod]
+.ansible/
 .pytest_cache/
+.ruff_cache/
+.venv/
 tests/output/
-captain-minio-*.tar.gz
+dagoldfish-minio-*.tar.gz

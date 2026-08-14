@@ -1,13 +1,13 @@
 ---
-namespace: captain
+namespace: dagoldfish
 name: minio
 version: 0.1.0
 readme: README.md
 authors:
-  - Dagoldfish
+  - Geoffrey Burger (@dagoldfish)
 description: Manage MinIO AIStor identities, policies, and site replication without mc.
 license:
-  - MIT
+  - GPL-3.0-or-later
 tags:
   - minio
   - aistor
@@ -20,6 +20,10 @@ documentation: https://github.com/dagoldfish/ansible-collection-minio#readme
 homepage: https://github.com/dagoldfish/ansible-collection-minio
 issues: https://github.com/dagoldfish/ansible-collection-minio/issues
 build_ignore:
+  - .agents
+  - .ansible
+  - .codex
+  - .github
   - .ruff_cache
   - .pytest_cache
   - tests/output

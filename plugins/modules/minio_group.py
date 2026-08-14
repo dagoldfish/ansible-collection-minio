@@ -1,7 +1,13 @@
 #!/usr/bin/python
+# Copyright: (c) 2026, Geoffrey Burger (@dagoldfish)
+# GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Manage MinIO local groups and membership."""
 
-from __future__ import annotations
+from __future__ import absolute_import, division, print_function
+
+__metaclass__ = type
 
 DOCUMENTATION = r"""
 ---
@@ -39,7 +45,7 @@ attributes:
 
 EXAMPLES = r"""
 - name: Reconcile the backup group
-  captain.minio.minio_group:
+  dagoldfish.minio.minio_group:
     auth: "{{ aistor_auth }}"
     name: backups
     members: [backup]
@@ -54,7 +60,7 @@ group:
 """
 
 from ansible.module_utils.basic import AnsibleModule
-from ansible_collections.captain.minio.plugins.module_utils.minio_admin import (
+from ansible_collections.dagoldfish.minio.plugins.module_utils.minio_admin import (
     admin_client,
     auth_argument_spec,
     fail_from_exception,

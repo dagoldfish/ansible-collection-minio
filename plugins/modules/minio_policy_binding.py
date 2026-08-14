@@ -1,7 +1,13 @@
 #!/usr/bin/python
+# Copyright: (c) 2026, Geoffrey Burger (@dagoldfish)
+# GNU General Public License v3.0+ (see LICENSE or https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Manage built-in and LDAP policy associations."""
 
-from __future__ import annotations
+from __future__ import absolute_import, division, print_function
+
+__metaclass__ = type
 
 DOCUMENTATION = r"""
 ---
@@ -34,7 +40,7 @@ attributes:
     details: LDAP binding operations fail clearly in check mode.
 """
 EXAMPLES = r"""
-- captain.minio.minio_policy_binding:
+- dagoldfish.minio.minio_policy_binding:
     auth: "{{ aistor_auth }}"
     policies: [readonly]
     user: backup
@@ -43,7 +49,7 @@ RETURN = r"""
 policies: {description: Policies targeted by this operation., returned: always, type: list, elements: str}
 """
 from ansible.module_utils.basic import AnsibleModule
-from ansible_collections.captain.minio.plugins.module_utils.minio_admin import (
+from ansible_collections.dagoldfish.minio.plugins.module_utils.minio_admin import (
     admin_client,
     auth_argument_spec,
     fail_from_exception,

@@ -40,4 +40,4 @@
     # Override this object only when two real, empty sites are ready.
     aistor_admin_site_replication: {}
   roles:
-    - role: captain.minio.aistor_admin
+    - role: dagoldfish.minio.aistor_admin
