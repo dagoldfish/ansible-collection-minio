@@ -37,6 +37,8 @@ jobs:
           for module in minio_user minio_group minio_policy minio_policy_binding minio_service_account minio_site_replication minio_site_replication_info; do
             ansible-doc -t module "captain.minio.$module" >/dev/null
           done
+          ansible-playbook playbooks/manage_aistor.yml --syntax-check
+          AISTOR_MANAGE=false ansible-playbook playbooks/manage_aistor.yml --check
       - name: Run Ansible collection sanity checks
         run: |
           # The wheel-distributed ansible-test 2.19 ansible-doc check mistakes
