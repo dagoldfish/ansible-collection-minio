@@ -1,0 +1,7 @@
+plugins/modules/minio_group.py validate-modules:missing-gplv3-license
+plugins/modules/minio_policy.py validate-modules:missing-gplv3-license
+plugins/modules/minio_policy_binding.py validate-modules:missing-gplv3-license
+plugins/modules/minio_service_account.py validate-modules:missing-gplv3-license
+plugins/modules/minio_site_replication.py validate-modules:missing-gplv3-license
+plugins/modules/minio_site_replication_info.py validate-modules:missing-gplv3-license
+plugins/modules/minio_user.py validate-modules:missing-gplv3-license

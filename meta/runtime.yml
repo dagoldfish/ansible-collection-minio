@@ -1,0 +1,11 @@
+---
+requires_ansible: ">=2.16.0"
+action_groups:
+  minio:
+    - minio_group
+    - minio_policy
+    - minio_policy_binding
+    - minio_service_account
+    - minio_site_replication
+    - minio_site_replication_info
+    - minio_user

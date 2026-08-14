@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: Dagoldfish
+  description: Reconcile MinIO AIStor IAM and site replication.
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: GenericLinux
+      versions: [all]
+dependencies: []
