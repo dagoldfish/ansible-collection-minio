@@ -1,7 +1,7 @@
 # `dagoldfish.minio`
 
 Manage MinIO AIStor identities, policies, and site replication with Ansible and
-the official Python SDK. The collection does not install or invoke `mc`.
+the official Python SDK.
 
 The collection is aimed at operators who want declarative, reviewable AIStor
 administration. It includes seven modules and the `aistor_admin` role, which
@@ -19,7 +19,7 @@ Until then, build and install the artifact locally:
 
 ```sh
 ansible-galaxy collection build
-ansible-galaxy collection install dagoldfish-minio-0.1.0.tar.gz
+ansible-galaxy collection install dagoldfish-minio-{version}.tar.gz
 ```
 
 Requirements:
@@ -116,15 +116,7 @@ Run the complete local, non-live validation workflow from any checkout path:
 
 It creates a temporary collection layout, installs validation dependencies,
 runs static/unit/sanity checks, builds and installs the artifact, renders all
-module documentation, and exercises the example playbook safely. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for integration-test instructions.
-
-## Release status
-
-Version `0.1.0` is the intended first Galaxy release. Publishing is manual:
-review the Git history and built artifact for secrets, confirm live integration
-results, then upload `dagoldfish-minio-0.1.0.tar.gz` under the `dagoldfish`
-namespace.
+module documentation, and exercises the example playbook safely.
 
 ## License
 
@@ -133,5 +125,5 @@ GPL-3.0-or-later. See [LICENSE](LICENSE) for the complete license text.
 
 ## Disclaimer
 
-This project was developed with substantial assistance from AI tools. All
+This project was developed with assistance from AI tools. All
 AI-assisted contributions were reviewed by a human maintainer before inclusion.
