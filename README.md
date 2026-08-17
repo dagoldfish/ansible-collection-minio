@@ -126,4 +126,12 @@ review the Git history and built artifact for secrets, confirm live integration
 results, then upload `dagoldfish-minio-0.1.0.tar.gz` under the `dagoldfish`
 namespace.
 
-This collection is licensed under GPL-3.0-or-later. See [LICENSE](LICENSE).
+## License
+
+Copyright (c) 2026 Geoffrey Burger. This collection is licensed under
+GPL-3.0-or-later. See [LICENSE](LICENSE) for the complete license text.
+
+## Disclaimer
+
+This project was developed with substantial assistance from AI tools. All
+AI-assisted contributions were reviewed by a human maintainer before inclusion.
