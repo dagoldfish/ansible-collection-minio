@@ -9,7 +9,7 @@ applies them in a safe dependency order.
 
 ## Install
 
-After the first Galaxy release:
+Install the collection from Ansible Galaxy:
 
 ```sh
 ansible-galaxy collection install dagoldfish.minio
@@ -103,8 +103,9 @@ so shared module defaults can be defined once when appropriate.
 - Replication removal requires `state: absent` and `force: true`; complete
   topology removal additionally requires `remove_all: true` with an empty
   `sites` list.
-- The modules have mocked unit coverage, but release `0.1.0` remains blocked
-  until the integration suite passes against a disposable AIStor deployment.
+- Release `0.1.0` has mocked unit coverage but has not yet been exercised against
+  a live disposable AIStor deployment. Treat it as experimental and validate it
+  outside production first.
 
 ## Develop and validate
 

@@ -39,7 +39,14 @@ ansible-lint --offline --nocolor playbooks roles tests/integration
 ansible-test sanity --venv
 
 ansible-galaxy collection build --force --output-path "${validation_artifact_dir}"
-validation_artifact="${validation_artifact_dir}/dagoldfish-minio-0.1.0.tar.gz"
+shopt -s nullglob
+validation_artifacts=("${validation_artifact_dir}"/dagoldfish-minio-*.tar.gz)
+shopt -u nullglob
+if (( ${#validation_artifacts[@]} != 1 )); then
+  echo "Expected exactly one built collection artifact, found ${#validation_artifacts[@]}." >&2
+  exit 1
+fi
+validation_artifact="${validation_artifacts[0]}"
 tar -tzf "${validation_artifact}" >/dev/null
 ansible-galaxy collection install "${validation_artifact}" --force -p "${validation_install_dir}"
 
