@@ -21,7 +21,7 @@ jobs:
           python-version: "3.12"
       - name: Run complete non-live validation
         env:
-          VALIDATE_ANSIBLE_CORE_VERSION: "2.20.2"
+          VALIDATE_ANSIBLE_CORE_VERSION: "2.21.2"
           VALIDATE_PYTHON: python
         run: ./scripts/validate.sh
 
