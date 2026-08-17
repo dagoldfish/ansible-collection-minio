@@ -25,7 +25,7 @@ ansible-galaxy collection install dagoldfish-minio-0.1.0.tar.gz
 Requirements:
 
 - Python 3.9 or newer
-- ansible-core 2.16 or newer
+- ansible-core 2.14.18 or newer
 - `minio` 7.2.20 or newer on the Python environment that executes the modules
 
 Install the SDK on the controller for `connection: local`, or on each managed
