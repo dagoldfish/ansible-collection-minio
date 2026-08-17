@@ -1,5 +1,5 @@
 ---
-requires_ansible: ">=2.16.0"
+requires_ansible: ">=2.14.18"
 action_groups:
   minio:
     - minio_group

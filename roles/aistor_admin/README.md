@@ -26,7 +26,7 @@ MinIO, Python, or the MinIO SDK.
     - role: dagoldfish.minio.aistor_admin
 ```
 
-Python 3.9+, ansible-core 2.16+, and minio-py 7.2.20+ must be available where
+Python 3.9+, ansible-core 2.14.18+, and minio-py 7.2.20+ must be available where
 the modules execute. With `connection: local`, that is the controller.
 
 ## Variables

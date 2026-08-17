@@ -3,7 +3,7 @@ galaxy_info:
   author: Dagoldfish
   description: Reconcile MinIO AIStor IAM and site replication.
   license: GPL-3.0-or-later
-  min_ansible_version: "2.16"
+  min_ansible_version: "2.14.18"
   platforms:
     - name: GenericLinux
       versions: [all]
