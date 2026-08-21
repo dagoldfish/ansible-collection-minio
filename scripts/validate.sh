@@ -52,6 +52,7 @@ ansible-galaxy collection install "${validation_artifact}" --force -p "${validat
 
 export ANSIBLE_COLLECTIONS_PATH="${validation_install_dir}"
 for validation_module in \
+  minio_bucket \
   minio_user \
   minio_group \
   minio_policy \

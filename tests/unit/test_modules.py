@@ -39,6 +39,60 @@ def result(func, module, client):
     return caught.value.args[0]
 
 
+class Buckets:
+    def __init__(self, exists=False):
+        self.exists, self.calls = exists, []
+
+    def bucket_exists(self, name):
+        self.calls.append(("exists", name))
+        return self.exists
+
+    def make_bucket(self, name, **kwargs):
+        self.calls.append(("create", name, kwargs))
+
+    def remove_bucket(self, name):
+        self.calls.append(("remove", name))
+
+
+def test_bucket_create_and_existing_noop():
+    mod = importlib.import_module(f"{BASE}.minio_bucket")
+    params = {"name": "backups", "region": "eu-west-1", "object_lock": True, "state": "present"}
+    client = Buckets()
+    out = result(mod.run, Module(params), client)
+    assert out == {
+        "changed": True,
+        "bucket": {"name": "backups", "region": "eu-west-1", "object_lock": True},
+    }
+    assert client.calls == [
+        ("exists", "backups"),
+        ("create", "backups", {"location": "eu-west-1", "object_lock": True}),
+    ]
+
+    existing = Buckets(True)
+    assert result(mod.run, Module(params), existing)["changed"] is False
+    assert existing.calls == [("exists", "backups")]
+
+
+def test_bucket_check_mode_predicts_without_mutating():
+    mod = importlib.import_module(f"{BASE}.minio_bucket")
+    params = {"name": "backups", "region": None, "object_lock": False, "state": "present"}
+    client = Buckets()
+    assert result(mod.run, Module(params, True), client)["changed"] is True
+    assert client.calls == [("exists", "backups")]
+
+
+def test_bucket_remove_and_absent_noop():
+    mod = importlib.import_module(f"{BASE}.minio_bucket")
+    params = {"name": "backups", "region": None, "object_lock": False, "state": "absent"}
+    client = Buckets(True)
+    assert result(mod.run, Module(params), client)["changed"] is True
+    assert client.calls == [("exists", "backups"), ("remove", "backups")]
+
+    missing = Buckets()
+    assert result(mod.run, Module(params), missing)["changed"] is False
+    assert missing.calls == [("exists", "backups")]
+
+
 class Users:
     def __init__(self, exists=True):
         self.exists, self.calls = exists, []
