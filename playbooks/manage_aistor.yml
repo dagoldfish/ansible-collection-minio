@@ -36,6 +36,18 @@
       - access_key: example-service
         secret_key: "{{ lookup('ansible.builtin.env', 'AISTOR_EXAMPLE_SERVICE_SECRET') }}"
         name: Example automation
+    aistor_admin_ldap_providers:
+      - name: partners
+        server_addr: ldap.partners.example.com:636
+        lookup_bind_dn: cn=minio,ou=services,dc=partners,dc=example
+        lookup_bind_password: "{{ lookup('ansible.builtin.env', 'AISTOR_LDAP_BIND_PASSWORD') }}"
+        user_dn_search_base_dn: ou=users,dc=partners,dc=example
+        user_dn_search_filter: "(uid=%s)"
+        group_search_base_dn: ou=groups,dc=partners,dc=example
+        group_search_filter: "(&(objectClass=groupOfNames)(member=%d))"
+        enabled: true
+    # Opt in only when a cluster-wide restart is acceptable.
+    aistor_admin_restart_on_ldap_change: false
     aistor_admin_policy_bindings:
       - policies: [example-read]
         group: example-readers
