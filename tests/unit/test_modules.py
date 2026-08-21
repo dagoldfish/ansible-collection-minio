@@ -241,14 +241,122 @@ def test_ldap_check_mode_fails_clearly():
 
 
 class LdapBindings:
+    def __init__(self):
+        self.calls = []
+
     def attach_policy_ldap(self, policies, **target):
+        self.calls.append(("attach", policies, target))
         return {"policiesAttached": policies}
+
+    def detach_policy_ldap(self, policies, **target):
+        self.calls.append(("detach", policies, target))
+        return {"policiesDetached": policies}
 
 
 def test_ldap_binding_uses_server_change_response():
     mod = importlib.import_module(f"{BASE}.minio_policy_binding")
     params = {"policies": ["read"], "user": "uid=a", "group": None, "identity_provider": "ldap", "state": "present"}
-    assert result(mod.run, Module(params), LdapBindings())["changed"] is True
+    client = LdapBindings()
+    assert result(mod.run, Module(params), client)["changed"] is True
+    assert client.calls == [("attach", ["read"], {"user": "uid=a"})]
+
+
+@pytest.mark.parametrize(
+    ("state", "target", "body"),
+    [
+        ("present", {"user": "uid=a"}, '{"message":"policy is already bound to user"}'),
+        ("present", {"group": "cn=team"}, '{"message":"policy is already attached to group"}'),
+        ("absent", {"user": "uid=a"}, '{"message":"no policy association exists for user"}'),
+    ],
+)
+def test_ldap_binding_treats_satisfied_state_as_unchanged(state, target, body):
+    mod = importlib.import_module(f"{BASE}.minio_policy_binding")
+
+    class NoopBindings:
+        def attach_policy_ldap(self, policies, **actual_target):
+            assert actual_target == target
+            raise MinioAdminException("409", body)
+
+        def detach_policy_ldap(self, policies, **actual_target):
+            assert actual_target == target
+            raise MinioAdminException("409", body)
+
+    params = {
+        "policies": ["read"],
+        "user": target.get("user"),
+        "group": target.get("group"),
+        "identity_provider": "ldap",
+        "state": state,
+    }
+    assert result(mod.run, Module(params), NoopBindings())["changed"] is False
+
+
+def test_ldap_binding_reconciles_mixed_policy_list_individually():
+    mod = importlib.import_module(f"{BASE}.minio_policy_binding")
+
+    class MixedBindings:
+        def __init__(self):
+            self.calls = []
+
+        def attach_policy_ldap(self, policies, **target):
+            self.calls.append((policies, target))
+            if policies == ["read"]:
+                raise MinioAdminException("409", "policy is already mapped to user")
+            return {"policiesAttached": policies}
+
+    params = {
+        "policies": ["write", "read"],
+        "user": "uid=a",
+        "group": None,
+        "identity_provider": "ldap",
+        "state": "present",
+    }
+    client = MixedBindings()
+    assert result(mod.run, Module(params), client) == {"changed": True, "policies": ["read", "write"]}
+    assert client.calls == [(["read"], {"user": "uid=a"}), (["write"], {"user": "uid=a"})]
+
+
+def test_ldap_detach_uses_server_change_response():
+    mod = importlib.import_module(f"{BASE}.minio_policy_binding")
+    params = {
+        "policies": ["read"],
+        "user": None,
+        "group": "cn=team",
+        "identity_provider": "ldap",
+        "state": "absent",
+    }
+    client = LdapBindings()
+    assert result(mod.run, Module(params), client)["changed"] is True
+    assert client.calls == [("detach", ["read"], {"group": "cn=team"})]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        MinioAdminException("403", "access denied while updating policy"),
+        MinioAdminException("404", "policy could not be attached because the LDAP user is missing"),
+        MinioAdminException("400", "malformed policy association request"),
+        MinioAdminException("409", "policy operation is already in progress"),
+        RuntimeError("policy is already bound"),
+    ],
+)
+def test_ldap_binding_does_not_hide_unrecognized_errors(error):
+    mod = importlib.import_module(f"{BASE}.minio_policy_binding")
+
+    class FailedBindings:
+        def attach_policy_ldap(self, policies, **target):
+            raise error
+
+    params = {
+        "policies": ["read"],
+        "user": "uid=a",
+        "group": None,
+        "identity_provider": "ldap",
+        "state": "present",
+    }
+    with pytest.raises(type(error)) as caught:
+        mod.run(Module(params), FailedBindings())
+    assert caught.value is error
 
 
 class ServiceAccounts:

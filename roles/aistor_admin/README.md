@@ -84,7 +84,9 @@ Each `aistor_admin_service_accounts` item accepts `access_key`, `secret_key`,
 Each `aistor_admin_policy_bindings` item accepts `policies` and exactly one of
 `user` or `group`. `identity_provider` is `builtin` by default and may be
 `ldap`; `state` is `present` by default. LDAP bindings cannot be predicted in
-check mode because minio-py provides no LDAP association read-back API.
+check mode because minio-py provides no LDAP association read-back API. During
+normal runs, LDAP attach and detach operations are idempotent when the server
+reports that the requested binding state is already satisfied.
 
 ### Site replication
 
