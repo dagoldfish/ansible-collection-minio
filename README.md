@@ -105,7 +105,7 @@ so shared module defaults can be defined once when appropriate.
 - Replication removal requires `state: absent` and `force: true`; complete
   topology removal additionally requires `remove_all: true` with an empty
   `sites` list.
-- Release `0.1.0` has mocked unit coverage but has not yet been exercised against
+- The collection has mocked unit coverage but has not yet been exercised against
   a live disposable AIStor deployment. Treat it as experimental and validate it
   outside production first.
 
