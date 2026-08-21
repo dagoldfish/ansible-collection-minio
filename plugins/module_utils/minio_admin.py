@@ -18,12 +18,13 @@ __all__ = ("PeerInfo", "PeerSite", "SiteReplicationStatusOptions")
 
 MINIO_IMP_ERR = None
 try:
-    from minio import MinioAdmin
+    from minio import Minio, MinioAdmin
     from minio.credentials import StaticProvider
     from minio.error import MinioAdminException
     from minio.minioadmin import PeerInfo, PeerSite, SiteReplicationStatusOptions
 except ImportError:
     MINIO_IMP_ERR = traceback.format_exc()
+    Minio = None  # type: ignore[assignment,misc]
     MinioAdmin = None  # type: ignore[assignment,misc]
     StaticProvider = None  # type: ignore[assignment,misc]
     MinioAdminException = Exception  # type: ignore[assignment,misc]
@@ -61,6 +62,25 @@ def admin_client(module: Any) -> Any:
         endpoint=endpoint,
         credentials=StaticProvider(auth["access_key"], auth["secret_key"]),
         region=auth["region"],
+        secure=auth["secure"],
+        cert_check=auth["validate_certs"],
+    )
+
+
+def s3_client(module: Any) -> Any:
+    """Build the official SDK S3 client from module parameters."""
+    if MINIO_IMP_ERR:
+        module.fail_json(
+            msg=missing_required_lib("minio", url="https://github.com/minio/minio-py"),
+            exception=MINIO_IMP_ERR,
+        )
+    auth = module.params["auth"]
+    endpoint = auth["endpoint"].removeprefix("https://").removeprefix("http://").rstrip("/")
+    return Minio(
+        endpoint=endpoint,
+        access_key=auth["access_key"],
+        secret_key=auth["secret_key"],
+        region=auth["region"] or None,
         secure=auth["secure"],
         cert_check=auth["validate_certs"],
     )

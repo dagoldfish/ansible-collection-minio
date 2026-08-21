@@ -5,7 +5,7 @@ version: 0.1.1
 readme: README.md
 authors:
   - Geoffrey Burger (@dagoldfish)
-description: Manage MinIO AIStor identities, policies, and site replication without mc.
+description: Manage MinIO AIStor buckets, identities, policies, and site replication without mc.
 license:
   - GPL-3.0-or-later
 tags:

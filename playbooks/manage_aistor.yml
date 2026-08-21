@@ -11,6 +11,11 @@
       secret_key: "{{ lookup('ansible.builtin.env', 'AISTOR_ADMIN_SECRET_KEY') }}"
       secure: true
       validate_certs: true
+    aistor_admin_buckets:
+      - name: example
+      - name: example-archive
+        region: eu-west-1
+        object_lock: true
     aistor_admin_policies:
       - name: example-read
         policy:

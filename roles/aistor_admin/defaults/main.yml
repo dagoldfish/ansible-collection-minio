@@ -1,6 +1,7 @@
 ---
 aistor_admin_manage: false
 aistor_admin_auth: {}
+aistor_admin_buckets: []
 aistor_admin_policies: []
 aistor_admin_users: []
 aistor_admin_groups: []

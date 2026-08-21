@@ -9,6 +9,8 @@ All notable changes to `dagoldfish.minio` are documented in this file.
 - Manage default and named LDAP identity providers through the official Python SDK.
 - Optionally restart AIStor once through a role handler after LDAP changes.
 - Restart the AIStor service with the `minio_service` module.
+- Create buckets and safely remove empty buckets through the official Python SDK.
+- Reconcile buckets before policies with the `aistor_admin` role.
 
 ## 0.1.1 - 2026-08-21
 
