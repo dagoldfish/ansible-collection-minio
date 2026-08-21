@@ -15,7 +15,7 @@ module: minio_ldap_provider
 short_description: Manage a MinIO AIStor LDAP identity provider
 description:
   - Creates, updates, enables, disables, and removes LDAP provider configurations.
-  - Uses the official Python SDK generic server-configuration API.
+  - Uses the dedicated, signed MinIO identity-provider Admin API without invoking C(mc).
   - Server environment variables override settings managed by this module.
 options:
   auth:
@@ -81,14 +81,15 @@ restart_required:
   type: bool
 """
 
-import re
-
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.dagoldfish.minio.plugins.module_utils.minio_admin import (
     MinioAdminException,
     admin_client,
     auth_argument_spec,
     fail_from_exception,
+    ldap_idp_delete,
+    ldap_idp_get,
+    ldap_idp_set,
 )
 
 STRING_FIELDS = (
@@ -103,13 +104,6 @@ STRING_FIELDS = (
     "comment",
 )
 BOOL_FIELDS = ("enabled", "tls_skip_verify", "server_insecure", "server_starttls")
-CONFIG_KEYS = STRING_FIELDS + (
-    "lookup_bind_password",
-    "enable",
-    "tls_skip_verify",
-    "server_insecure",
-    "server_starttls",
-)
 REQUIRED_ON_CREATE = (
     "server_addr",
     "lookup_bind_dn",
@@ -119,36 +113,6 @@ REQUIRED_ON_CREATE = (
 )
 
 
-def _config_key(name):
-    return "identity_ldap" if name == "_" else f"identity_ldap:{name}"
-
-
-def _read_config_key(name):
-    """Return a target-scoped key; a bare subsystem read returns all targets."""
-    return "identity_ldap:" if name == "_" else f"identity_ldap:{name}"
-
-
-def _strip_quotes(value):
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-        return value[1:-1]
-    return value
-
-
-def _parse_config(value):
-    """Parse SDK config output using known key boundaries so spaces survive."""
-    if not value:
-        return {}
-    text = str(value).strip()
-    pattern = re.compile(r"(?:^|\s)(%s)=" % "|".join(re.escape(key) for key in CONFIG_KEYS))
-    matches = list(pattern.finditer(text))
-    parsed = {}
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        parsed[match.group(1)] = _strip_quotes(text[match.end() : end])
-    return parsed
-
-
 def _is_missing(error):
     if not isinstance(error, MinioAdminException):
         return False
@@ -156,15 +120,19 @@ def _is_missing(error):
     return "doesn't exist" in message or "does not exist" in message or "not found" in message
 
 
-def _read_current(client, key, is_default):
+def _read_current(client, name):
     try:
-        current = _parse_config(client.config_get(key))
+        response = ldap_idp_get(client, name)
     except Exception as error:
         if _is_missing(error):
             return False, {}
         raise
-    # The default target always exists in the server configuration with empty defaults.
-    exists = bool(current.get("server_addr")) if is_default else True
+    current = {
+        item["key"]: item.get("value", "")
+        for item in response.get("info", [])
+        if item.get("key") and item.get("key") != "lookup_bind_password"
+    }
+    exists = bool(response)
     # The Admin API omits enable=on from its serialized configuration output.
     if exists and "enable" not in current:
         current["enable"] = "on"
@@ -186,14 +154,13 @@ def _public_config(name, current):
 def run(module, client):
     params = module.params
     name = params["name"]
-    key = _config_key(name)
-    exists, current = _read_current(client, _read_config_key(name), name == "_")
+    exists, current = _read_current(client, name)
 
     if params["state"] == "absent":
         if not exists:
             module.exit_json(changed=False, provider={"name": name}, restart_required=False)
         if not module.check_mode:
-            client.config_reset(key)
+            ldap_idp_delete(client, name)
         module.exit_json(changed=True, provider={"name": name}, restart_required=True)
 
     if not exists:
@@ -221,7 +188,7 @@ def run(module, client):
 
     changed = bool(changes) or not exists
     if changed and not module.check_mode:
-        client.config_set(key, changes)
+        ldap_idp_set(client, name, changes, update=exists)
 
     effective = dict(current)
     effective.update({field: value for field, value in changes.items() if field != "lookup_bind_password"})

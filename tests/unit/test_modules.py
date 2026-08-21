@@ -241,6 +241,37 @@ def test_policy_canonical_comparison_is_idempotent():
     assert result(mod.run, Module(params), Policies())["changed"] is False
 
 
+def test_policy_reordered_actions_and_statements_are_idempotent():
+    mod = importlib.import_module(f"{BASE}.minio_policy")
+    desired = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {"Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject"], "Resource": ["arn:one"]},
+            {"Effect": "Deny", "Action": ["s3:DeleteObject"], "Resource": ["arn:two"]},
+        ],
+    }
+    returned = {
+        "Statement": [
+            {"Resource": ["arn:two"], "Action": ["s3:DeleteObject"], "Effect": "Deny"},
+            {"Resource": ["arn:one"], "Action": ["s3:PutObject", "s3:GetObject"], "Effect": "Allow"},
+        ],
+        "Version": "2012-10-17",
+    }
+
+    class ReorderedPolicies(Policies):
+        def policy_info(self, name):
+            return returned
+
+    params = {"name": "read", "policy": desired, "policy_file": None, "state": "present"}
+    assert result(mod.run, Module(params), ReorderedPolicies())["changed"] is False
+
+    returned["Statement"][0]["Effect"] = "Allow"
+    client = ReorderedPolicies()
+    client.policy_add = lambda *args, **kwargs: client.calls.append((args, kwargs))
+    assert result(mod.run, Module(params), client)["changed"] is True
+    assert client.calls
+
+
 def test_policy_delete():
     mod = importlib.import_module(f"{BASE}.minio_policy")
     params = {"name": "read", "policy": None, "policy_file": None, "state": "absent"}
@@ -318,6 +349,16 @@ def test_ldap_binding_uses_server_change_response():
 @pytest.mark.parametrize(
     ("state", "target", "body"),
     [
+        (
+            "present",
+            {"user": "uid=a"},
+            '{"Code":"XMinioAdminPolicyChangeAlreadyApplied","Message":"The specified policy change is already in effect."}',
+        ),
+        (
+            "absent",
+            {"group": "cn=team"},
+            '{"Code":"XMinioAdminPolicyChangeAlreadyApplied","Message":"The specified policy change is already in effect."}',
+        ),
         ("present", {"user": "uid=a"}, '{"message":"policy is already bound to user"}'),
         ("present", {"group": "cn=team"}, '{"message":"policy is already attached to group"}'),
         ("absent", {"user": "uid=a"}, '{"message":"no policy association exists for user"}'),
@@ -419,17 +460,20 @@ class LdapProviders:
         self.missing = missing
         self.calls = []
 
-    def config_get(self, key):
-        self.calls.append(("get", key))
+    def get_idp_config(self, config_type, name):
+        self.calls.append(("get", config_type, name))
         if self.missing:
             raise MinioAdminException("404", "sub-system target does not exist")
         return self.config
 
-    def config_set(self, key, config):
-        self.calls.append(("set", key, config))
+    def add_or_update_idp_config(self, config_type, name, config, update=False):
+        self.calls.append(("set", config_type, name, config, update))
 
-    def config_reset(self, key):
-        self.calls.append(("reset", key))
+    def delete_idp_config(self, config_type, name):
+        self.calls.append(("delete", config_type, name))
+
+    def config_get(self, key):
+        raise AssertionError(f"legacy config read must not be used: {key}")
 
 
 def ldap_params(**overrides):
@@ -456,14 +500,31 @@ def ldap_params(**overrides):
     return params
 
 
-LDAP_CONFIG = (
-    "identity_ldap server_addr=ldap.example.com:636 "
-    "lookup_bind_dn=cn=minio,ou=services,dc=example,dc=com "
-    "lookup_bind_password=*redacted* "
-    "user_dn_search_base_dn=ou=users,dc=example,dc=com "
-    "user_dn_search_filter=(uid=%s) tls_skip_verify=off "
-    "server_insecure=off server_starttls=off comment=Primary directory service"
-)
+LDAP_CONFIG = {
+    "type": "ldap",
+    "name": "_",
+    "info": [
+        {"key": "server_addr", "value": "ldap.example.com:636", "isCfg": True, "isEnv": False},
+        {
+            "key": "lookup_bind_dn",
+            "value": "cn=minio,ou=services,dc=example,dc=com",
+            "isCfg": True,
+            "isEnv": False,
+        },
+        {"key": "lookup_bind_password", "value": "bind-password", "isCfg": True, "isEnv": False},
+        {
+            "key": "user_dn_search_base_dn",
+            "value": "ou=users,dc=example,dc=com",
+            "isCfg": True,
+            "isEnv": False,
+        },
+        {"key": "user_dn_search_filter", "value": "(uid=%s)", "isCfg": True, "isEnv": False},
+        {"key": "tls_skip_verify", "value": "off", "isCfg": True, "isEnv": False},
+        {"key": "server_insecure", "value": "off", "isCfg": True, "isEnv": False},
+        {"key": "server_starttls", "value": "off", "isCfg": True, "isEnv": False},
+        {"key": "comment", "value": "Primary directory service", "isCfg": True, "isEnv": False},
+    ],
+}
 
 
 def test_ldap_provider_is_idempotent_and_parses_values_with_spaces():
@@ -476,17 +537,16 @@ def test_ldap_provider_is_idempotent_and_parses_values_with_spaces():
     assert out["provider"]["comment"] == "Primary directory service"
     assert "lookup_bind_password" not in out["provider"]
     assert out["provider"]["enabled"] is True
-    assert client.calls == [("get", "identity_ldap:")]
+    assert client.calls == [("get", "ldap", "_")]
 
 
-def test_ldap_provider_create_named_and_normalize_booleans():
+def test_ldap_provider_creates_missing_default_through_dedicated_api():
     mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
     params = ldap_params(
-        name="partners",
-        server_addr="ldap.partners.example.com:636",
-        lookup_bind_dn="cn=minio,dc=partners,dc=example",
-        lookup_bind_password="secret",
-        user_dn_search_base_dn="ou=users,dc=partners,dc=example",
+        server_addr="ldap.example.com:636",
+        lookup_bind_dn="cn=minio,dc=example",
+        lookup_bind_password="bind-password",
+        user_dn_search_base_dn="ou=users,dc=example",
         user_dn_search_filter="(uid=%s)",
         enabled=True,
         tls_skip_verify=False,
@@ -495,19 +555,24 @@ def test_ldap_provider_create_named_and_normalize_booleans():
     out = result(mod.run, Module(params), client)
     assert out["changed"] is True
     assert out["restart_required"] is True
-    assert client.calls[1] == (
-        "set",
-        "identity_ldap:partners",
-        {
-            "server_addr": "ldap.partners.example.com:636",
-            "lookup_bind_dn": "cn=minio,dc=partners,dc=example",
-            "user_dn_search_base_dn": "ou=users,dc=partners,dc=example",
-            "user_dn_search_filter": "(uid=%s)",
-            "enable": "on",
-            "tls_skip_verify": "off",
-            "lookup_bind_password": "secret",
-        },
-    )
+    assert client.calls[0] == ("get", "ldap", "_")
+    assert client.calls[1][:3] == ("set", "ldap", "_")
+    assert client.calls[1][4] is False
+    assert "lookup_bind_password=bind-password" in client.calls[1][3]
+    assert "identity_ldap:" not in repr(client.calls)
+    assert "lookup_bind_password" not in out["provider"]
+
+
+def test_ldap_provider_updates_existing_provider_through_dedicated_api():
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+    client = LdapProviders(LDAP_CONFIG)
+    out = result(mod.run, Module(ldap_params(comment="Updated directory")), client)
+    assert out["changed"] is True
+    assert out["restart_required"] is True
+    assert client.calls == [
+        ("get", "ldap", "_"),
+        ("set", "ldap", "_", 'comment="Updated directory"', True),
+    ]
 
 
 def test_ldap_provider_password_rotation_is_explicit_and_check_safe():
@@ -519,7 +584,7 @@ def test_ldap_provider_password_rotation_is_explicit_and_check_safe():
     rotate = ldap_params(lookup_bind_password="new-secret", update_bind_password=True)
     out = result(mod.run, Module(rotate, True), client)
     assert out["changed"] is True
-    assert client.calls == [("get", "identity_ldap:"), ("get", "identity_ldap:")]
+    assert client.calls == [("get", "ldap", "_"), ("get", "ldap", "_")]
 
 
 def test_ldap_provider_delete_and_absent_noop():
@@ -527,28 +592,22 @@ def test_ldap_provider_delete_and_absent_noop():
     client = LdapProviders(LDAP_CONFIG)
     out = result(mod.run, Module(ldap_params(state="absent")), client)
     assert out["changed"] is True
-    assert client.calls[-1] == ("reset", "identity_ldap")
+    assert client.calls[-1] == ("delete", "ldap", "_")
 
     missing = LdapProviders(missing=True)
     out = result(mod.run, Module(ldap_params(name="partners", state="absent")), missing)
     assert out["changed"] is False
-    assert missing.calls == [("get", "identity_ldap:partners")]
+    assert missing.calls == [("get", "ldap", "partners")]
 
 
-def test_ldap_default_read_is_isolated_from_named_providers():
+def test_ldap_default_read_never_uses_invalid_legacy_subsystem_key():
     mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
 
-    class MultipleProviders(LdapProviders):
-        def config_get(self, key):
-            self.calls.append(("get", key))
-            if key == "identity_ldap:":
-                return "identity_ldap enable=off server_addr="
-            return LDAP_CONFIG + "\nidentity_ldap:partners server_addr=ldap.partners.example.com:636 enable=on"
-
-    client = MultipleProviders()
-    out = result(mod.run, Module(ldap_params(state="absent")), client)
+    client = LdapProviders(LDAP_CONFIG)
+    out = result(mod.run, Module(ldap_params()), client)
     assert out["changed"] is False
-    assert client.calls == [("get", "identity_ldap:")]
+    assert client.calls == [("get", "ldap", "_")]
+    assert "identity_ldap:" not in repr(client.calls)
 
 
 def test_ldap_provider_requires_create_fields_and_rotation_password():
@@ -658,6 +717,68 @@ def test_service_account_status_update_and_delete():
     params["state"] = "absent"
     assert result(mod.run, Module(params), client)["changed"] is True
     assert client.calls[-1] == ("delete", "svc")
+
+
+@pytest.mark.parametrize(("account_status", "desired"), [("on", "enabled"), ("off", "disabled")])
+def test_service_account_account_status_is_idempotent(account_status, desired):
+    mod = importlib.import_module(f"{BASE}.minio_service_account")
+    params = {
+        "access_key": "svc",
+        "secret_key": None,
+        "name": None,
+        "description": None,
+        "policy": None,
+        "expiration": None,
+        "status": desired,
+        "update_secret": False,
+        "state": "present",
+    }
+    client = ServiceAccounts({"accessKey": "svc", "accountStatus": account_status})
+    assert result(mod.run, Module(params), client)["changed"] is False
+    assert client.calls == []
+
+
+@pytest.mark.parametrize("length", [7, 41])
+def test_service_account_rejects_invalid_secret_length_before_api_read(length):
+    mod = importlib.import_module(f"{BASE}.minio_service_account")
+    params = {
+        "access_key": "svc",
+        "secret_key": "s" * length,
+        "name": None,
+        "description": None,
+        "policy": None,
+        "expiration": None,
+        "status": None,
+        "update_secret": False,
+        "state": "present",
+    }
+
+    class UnreadClient:
+        def get_service_account(self, key):
+            raise AssertionError("API read occurred before local validation")
+
+    with pytest.raises(FailJson) as caught:
+        mod.run(Module(params), UnreadClient())
+    assert "between 8 and 40" in caught.value.args[0]["msg"]
+    assert "s" * length not in caught.value.args[0]["msg"]
+
+
+@pytest.mark.parametrize("length", [8, 40])
+def test_service_account_accepts_boundary_secret_lengths(length):
+    mod = importlib.import_module(f"{BASE}.minio_service_account")
+    params = {
+        "access_key": "svc",
+        "secret_key": "s" * length,
+        "name": None,
+        "description": None,
+        "policy": None,
+        "expiration": None,
+        "status": None,
+        "update_secret": False,
+        "state": "present",
+    }
+    client = ServiceAccounts()
+    assert result(mod.run, Module(params, True), client)["changed"] is True
 
 
 class Replication:

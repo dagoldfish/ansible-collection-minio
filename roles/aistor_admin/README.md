@@ -70,7 +70,8 @@ objects from a non-empty bucket.
 
 Each `aistor_admin_policies` item accepts `name`, one of `policy` or
 `policy_file`, and `state` (`present` by default). Policy dictionaries are
-compared as canonical JSON, so key order does not cause changes.
+compared semantically, so key order and ordering of set-like IAM arrays such as
+statements, actions, resources, and condition values do not cause changes.
 
 ### Users
 
@@ -88,7 +89,13 @@ membership untouched; enabling `purge_members` removes undeclared members.
 
 Each `aistor_admin_service_accounts` item accepts `access_key`, `secret_key`,
 `name`, `description`, `policy`, `expiration`, `status`, `update_secret`
-(`false`), and `state` (`present`). Secret handling matches local users.
+(`false`), and `state` (`present`). Explicit secrets must contain 8 through 40
+characters. Secret handling otherwise matches local users.
+
+MinIO site replication does not replicate service accounts owned by the root
+user. When the role authenticates as root, the service accounts it creates
+remain local to the originating site; the collection does not work around this
+server rule.
 
 ### LDAP providers
 

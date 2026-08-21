@@ -48,6 +48,8 @@ EXAMPLES = r"""
 RETURN = r"""
 policies: {description: Policies targeted by this operation., returned: always, type: list, elements: str}
 """
+import json
+
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.dagoldfish.minio.plugins.module_utils.minio_admin import (
     MinioAdminException,
@@ -62,15 +64,30 @@ def _is_ldap_policy_binding_noop(error, state):
     """Return whether an LDAP policy error means the requested state already exists."""
     if not isinstance(error, MinioAdminException):
         return False
-    body = str(getattr(error, "_body", "")).casefold()
+    raw_body = str(getattr(error, "_body", ""))
+    try:
+        details = json.loads(raw_body)
+    except (TypeError, ValueError):
+        details = {}
+    code = details.get("Code") or details.get("code")
+    if code == "XMinioAdminPolicyChangeAlreadyApplied":
+        return True
+    body = (raw_body + " " + str(error)).casefold()
     if "policy" not in body:
         return False
     phrases = (
         ("already attached", "already bound", "already associated", "already mapped")
         if state == "present"
-        else ("not attached", "not bound", "not associated", "not mapped", "no policy association")
+        else (
+            "not attached",
+            "not bound",
+            "not associated",
+            "not mapped",
+            "no policy association",
+            "already absent",
+        )
     )
-    return any(phrase in body for phrase in phrases)
+    return "already in effect" in body or any(phrase in body for phrase in phrases)
 
 
 def run(module, client):

@@ -2,6 +2,20 @@
 
 All notable changes to `dagoldfish.minio` are documented in this file.
 
+## 0.2.1 - 2026-08-21
+
+### Fixed
+
+- Create, read, update, and remove LDAP providers through the dedicated signed IDP Admin API.
+- Preserve LDAP bind-password secrecy in successful results and API failures.
+- Treat already-applied LDAP policy association changes as idempotent no-ops.
+- Normalize service-account status read-back and validate explicit secret lengths locally.
+- Compare set-like IAM policy arrays without regard to server-side ordering.
+
+### Documented
+
+- Root-owned service accounts remain local because MinIO site replication does not replicate them.
+
 ## 0.2.0 - 2026-08-21
 
 ### Added
