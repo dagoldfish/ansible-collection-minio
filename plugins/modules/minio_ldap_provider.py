@@ -136,6 +136,11 @@ def _read_current(client, name):
     # The Admin API omits enable=on from its serialized configuration output.
     if exists and "enable" not in current:
         current["enable"] = "on"
+    # The Admin API also omits boolean fields whose effective value is the
+    # default off. Normalize only existing providers so creation is unchanged.
+    if exists:
+        for field in ("tls_skip_verify", "server_insecure", "server_starttls"):
+            current.setdefault(field, "off")
     return exists, current
 
 

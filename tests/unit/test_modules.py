@@ -527,6 +527,11 @@ LDAP_CONFIG = {
 }
 
 
+def ldap_config_without(*keys):
+    """Return live-style IDP read-back with selected default values omitted."""
+    return {**LDAP_CONFIG, "info": [item for item in LDAP_CONFIG["info"] if item["key"] not in keys]}
+
+
 def test_ldap_provider_is_idempotent_and_parses_values_with_spaces():
     mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
     params = ldap_params(server_addr="ldap.example.com:636", comment="Primary directory service", enabled=True)
@@ -538,6 +543,53 @@ def test_ldap_provider_is_idempotent_and_parses_values_with_spaces():
     assert "lookup_bind_password" not in out["provider"]
     assert out["provider"]["enabled"] is True
     assert client.calls == [("get", "ldap", "_")]
+
+
+@pytest.mark.parametrize("field", ["server_starttls", "tls_skip_verify", "server_insecure"])
+def test_ldap_provider_omitted_default_off_boolean_is_idempotent(field):
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+    client = LdapProviders(ldap_config_without(field))
+    out = result(mod.run, Module(ldap_params(**{field: False})), client)
+    assert out["changed"] is False
+    assert out["restart_required"] is False
+    assert out["provider"][field] is False
+    assert client.calls == [("get", "ldap", "_")]
+
+
+@pytest.mark.parametrize("field", ["server_starttls", "tls_skip_verify", "server_insecure"])
+def test_ldap_provider_omitted_boolean_changes_when_true_is_desired(field):
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+    client = LdapProviders(ldap_config_without(field))
+    out = result(mod.run, Module(ldap_params(**{field: True})), client)
+    assert out["changed"] is True
+    assert out["restart_required"] is True
+    assert client.calls[-1] == ("set", "ldap", "_", f"{field}=on", True)
+
+
+@pytest.mark.parametrize(("returned", "desired", "changed"), [("on", True, False), ("off", False, False), ("on", False, True), ("off", True, True)])
+def test_ldap_provider_explicit_boolean_values_compare_correctly(returned, desired, changed):
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+    config = ldap_config_without("server_starttls")
+    config["info"].append({"key": "server_starttls", "value": returned, "isCfg": True, "isEnv": False})
+    client = LdapProviders(config)
+    out = result(mod.run, Module(ldap_params(server_starttls=desired)), client)
+    assert out["changed"] is changed
+    assert out["restart_required"] is changed
+
+
+def test_ldap_provider_second_run_with_omitted_defaults_does_not_request_restart():
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+    params = ldap_params(tls_skip_verify=False, server_insecure=False, server_starttls=False)
+    client = LdapProviders(ldap_config_without("tls_skip_verify", "server_insecure", "server_starttls"))
+
+    first_repeat = result(mod.run, Module(params), client)
+    second_repeat = result(mod.run, Module(params), client)
+
+    assert first_repeat["changed"] is False
+    assert second_repeat["changed"] is False
+    assert first_repeat["restart_required"] is False
+    assert second_repeat["restart_required"] is False
+    assert all(call[0] == "get" for call in client.calls)
 
 
 def test_ldap_provider_creates_missing_default_through_dedicated_api():
@@ -558,6 +610,9 @@ def test_ldap_provider_creates_missing_default_through_dedicated_api():
     assert client.calls[0] == ("get", "ldap", "_")
     assert client.calls[1][:3] == ("set", "ldap", "_")
     assert client.calls[1][4] is False
+    assert "tls_skip_verify=off" in client.calls[1][3]
+    assert "server_insecure=" not in client.calls[1][3]
+    assert "server_starttls=" not in client.calls[1][3]
     assert "lookup_bind_password=bind-password" in client.calls[1][3]
     assert "identity_ldap:" not in repr(client.calls)
     assert "lookup_bind_password" not in out["provider"]

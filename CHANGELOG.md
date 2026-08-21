@@ -7,6 +7,7 @@ All notable changes to `dagoldfish.minio` are documented in this file.
 ### Fixed
 
 - Create, read, update, and remove LDAP providers through the dedicated signed IDP Admin API.
+- Normalize omitted default-off LDAP boolean values during provider read-back.
 - Preserve LDAP bind-password secrecy in successful results and API failures.
 - Treat already-applied LDAP policy association changes as idempotent no-ops.
 - Normalize service-account status read-back and validate explicit secret lengths locally.
