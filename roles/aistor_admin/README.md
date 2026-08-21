@@ -42,6 +42,8 @@ safe by default because `aistor_admin_manage` is `false`.
 | `aistor_admin_users` | `[]` | Local users to reconcile |
 | `aistor_admin_groups` | `[]` | Local groups and memberships to reconcile |
 | `aistor_admin_service_accounts` | `[]` | Service accounts to reconcile |
+| `aistor_admin_ldap_providers` | `[]` | Default or named LDAP providers to reconcile |
+| `aistor_admin_restart_on_ldap_change` | `false` | Restart AIStor after LDAP changes |
 | `aistor_admin_policy_bindings` | `[]` | Built-in or LDAP bindings to reconcile |
 | `aistor_admin_site_replication` | `{}` | Optional replication operation |
 
@@ -79,6 +81,23 @@ Each `aistor_admin_service_accounts` item accepts `access_key`, `secret_key`,
 `name`, `description`, `policy`, `expiration`, `status`, `update_secret`
 (`false`), and `state` (`present`). Secret handling matches local users.
 
+### LDAP providers
+
+Each `aistor_admin_ldap_providers` item accepts `name` (`_` for the default),
+`server_addr`, `lookup_bind_dn`, `lookup_bind_password`, user and group search
+bases and filters, `user_dn_attributes`, `srv_record_name`, `comment`,
+`enabled`, `tls_skip_verify`, `server_insecure`, `server_starttls`, and `state`.
+Creation requires the server address, lookup-bind credentials, user search base,
+and user search filter. Omitted optional fields remain unchanged.
+
+AIStor redacts the lookup-bind password when reading configuration. Set
+`update_bind_password: true` to rotate an existing password intentionally.
+LDAP changes require a service restart. By default the role reports the pending
+restart and defers LDAP policy bindings; set
+`aistor_admin_restart_on_ldap_change: true` to restart once through the SDK and
+continue reconciliation. Server environment variables override configuration
+stored through the Admin API.
+
 ### Policy bindings
 
 Each `aistor_admin_policy_bindings` item accepts `policies` and exactly one of
@@ -101,9 +120,10 @@ the complete topology requires `state: absent`, `force: true`,
 
 ## Ordering and idempotency
 
-The role reconciles policies, users, groups, service accounts, policy bindings,
-and finally site replication. This permits later resources to reference earlier
-ones. Empty resource lists are no-ops, and undeclared resources are not purged.
+The role reconciles policies, users, groups, service accounts, LDAP providers,
+policy bindings, and finally site replication. LDAP changes are applied or
+reported through a handler before LDAP bindings. Empty resource lists are
+no-ops, and undeclared resources are not purged.
 
 Run with `--check` to preview all supported changes. The role intentionally
 fails on LDAP binding operations in check mode instead of claiming an

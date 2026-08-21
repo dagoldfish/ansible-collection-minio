@@ -54,8 +54,10 @@ export ANSIBLE_COLLECTIONS_PATH="${validation_install_dir}"
 for validation_module in \
   minio_user \
   minio_group \
+  minio_ldap_provider \
   minio_policy \
   minio_policy_binding \
+  minio_service \
   minio_service_account \
   minio_site_replication \
   minio_site_replication_info; do

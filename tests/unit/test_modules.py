@@ -359,6 +359,152 @@ def test_ldap_binding_does_not_hide_unrecognized_errors(error):
     assert caught.value is error
 
 
+class LdapProviders:
+    def __init__(self, config=None, missing=False):
+        self.config = config
+        self.missing = missing
+        self.calls = []
+
+    def config_get(self, key):
+        self.calls.append(("get", key))
+        if self.missing:
+            raise MinioAdminException("404", "sub-system target does not exist")
+        return self.config
+
+    def config_set(self, key, config):
+        self.calls.append(("set", key, config))
+
+    def config_reset(self, key):
+        self.calls.append(("reset", key))
+
+
+def ldap_params(**overrides):
+    params = {
+        "name": "_",
+        "server_addr": None,
+        "lookup_bind_dn": None,
+        "lookup_bind_password": None,
+        "update_bind_password": False,
+        "user_dn_search_base_dn": None,
+        "user_dn_search_filter": None,
+        "user_dn_attributes": None,
+        "group_search_base_dn": None,
+        "group_search_filter": None,
+        "srv_record_name": None,
+        "comment": None,
+        "enabled": None,
+        "tls_skip_verify": None,
+        "server_insecure": None,
+        "server_starttls": None,
+        "state": "present",
+    }
+    params.update(overrides)
+    return params
+
+
+LDAP_CONFIG = (
+    "identity_ldap server_addr=ldap.example.com:636 "
+    "lookup_bind_dn=cn=minio,ou=services,dc=example,dc=com "
+    "lookup_bind_password=*redacted* "
+    "user_dn_search_base_dn=ou=users,dc=example,dc=com "
+    "user_dn_search_filter=(uid=%s) enable=on tls_skip_verify=off "
+    "server_insecure=off server_starttls=off comment=Primary directory service"
+)
+
+
+def test_ldap_provider_is_idempotent_and_parses_values_with_spaces():
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+    params = ldap_params(server_addr="ldap.example.com:636", comment="Primary directory service", enabled=True)
+    client = LdapProviders(LDAP_CONFIG)
+    out = result(mod.run, Module(params), client)
+    assert out["changed"] is False
+    assert out["restart_required"] is False
+    assert out["provider"]["comment"] == "Primary directory service"
+    assert "lookup_bind_password" not in out["provider"]
+    assert client.calls == [("get", "identity_ldap")]
+
+
+def test_ldap_provider_create_named_and_normalize_booleans():
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+    params = ldap_params(
+        name="partners",
+        server_addr="ldap.partners.example.com:636",
+        lookup_bind_dn="cn=minio,dc=partners,dc=example",
+        lookup_bind_password="secret",
+        user_dn_search_base_dn="ou=users,dc=partners,dc=example",
+        user_dn_search_filter="(uid=%s)",
+        enabled=True,
+        tls_skip_verify=False,
+    )
+    client = LdapProviders(missing=True)
+    out = result(mod.run, Module(params), client)
+    assert out["changed"] is True
+    assert out["restart_required"] is True
+    assert client.calls[1] == (
+        "set",
+        "identity_ldap:partners",
+        {
+            "server_addr": "ldap.partners.example.com:636",
+            "lookup_bind_dn": "cn=minio,dc=partners,dc=example",
+            "user_dn_search_base_dn": "ou=users,dc=partners,dc=example",
+            "user_dn_search_filter": "(uid=%s)",
+            "enable": "on",
+            "tls_skip_verify": "off",
+            "lookup_bind_password": "secret",
+        },
+    )
+
+
+def test_ldap_provider_password_rotation_is_explicit_and_check_safe():
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+    client = LdapProviders(LDAP_CONFIG)
+    unchanged = ldap_params(lookup_bind_password="new-secret")
+    assert result(mod.run, Module(unchanged), client)["changed"] is False
+
+    rotate = ldap_params(lookup_bind_password="new-secret", update_bind_password=True)
+    out = result(mod.run, Module(rotate, True), client)
+    assert out["changed"] is True
+    assert client.calls == [("get", "identity_ldap"), ("get", "identity_ldap")]
+
+
+def test_ldap_provider_delete_and_absent_noop():
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+    client = LdapProviders(LDAP_CONFIG)
+    out = result(mod.run, Module(ldap_params(state="absent")), client)
+    assert out["changed"] is True
+    assert client.calls[-1] == ("reset", "identity_ldap")
+
+    missing = LdapProviders(missing=True)
+    out = result(mod.run, Module(ldap_params(name="partners", state="absent")), missing)
+    assert out["changed"] is False
+    assert missing.calls == [("get", "identity_ldap:partners")]
+
+
+def test_ldap_provider_requires_create_fields_and_rotation_password():
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+    with pytest.raises(FailJson):
+        mod.run(Module(ldap_params(name="partners")), LdapProviders(missing=True))
+    with pytest.raises(FailJson):
+        mod.run(Module(ldap_params(update_bind_password=True)), LdapProviders(LDAP_CONFIG))
+
+
+class Services:
+    def __init__(self):
+        self.calls = []
+
+    def service_restart(self):
+        self.calls.append("restart")
+        return "restarting"
+
+
+def test_service_restart_and_check_mode():
+    mod = importlib.import_module(f"{BASE}.minio_service")
+    client = Services()
+    assert result(mod.run, Module({"action": "restart"}), client)["response"] == "restarting"
+    assert result(mod.run, Module({"action": "restart"}, True), client)["response"] == ""
+    assert client.calls == ["restart"]
+
+
 class ServiceAccounts:
     def __init__(self, current=None):
         self.current, self.calls = current, []

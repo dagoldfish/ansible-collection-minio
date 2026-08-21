@@ -3,8 +3,10 @@ requires_ansible: ">=2.14.18"
 action_groups:
   minio:
     - minio_group
+    - minio_ldap_provider
     - minio_policy
     - minio_policy_binding
+    - minio_service
     - minio_service_account
     - minio_site_replication
     - minio_site_replication_info

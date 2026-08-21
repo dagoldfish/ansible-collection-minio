@@ -62,6 +62,39 @@
   when: aistor_admin_manage | bool
   no_log: true
 
+- name: Reconcile AIStor LDAP providers
+  dagoldfish.minio.minio_ldap_provider:
+    auth: "{{ aistor_admin_auth }}"
+    name: "{{ item.name | default('_') }}"
+    server_addr: "{{ item.server_addr | default(omit) }}"
+    lookup_bind_dn: "{{ item.lookup_bind_dn | default(omit) }}"
+    lookup_bind_password: "{{ item.lookup_bind_password | default(omit) }}"
+    update_bind_password: "{{ item.update_bind_password | default(false) }}"
+    user_dn_search_base_dn: "{{ item.user_dn_search_base_dn | default(omit) }}"
+    user_dn_search_filter: "{{ item.user_dn_search_filter | default(omit) }}"
+    user_dn_attributes: "{{ item.user_dn_attributes | default(omit) }}"
+    group_search_base_dn: "{{ item.group_search_base_dn | default(omit) }}"
+    group_search_filter: "{{ item.group_search_filter | default(omit) }}"
+    srv_record_name: "{{ item.srv_record_name | default(omit) }}"
+    comment: "{{ item.comment | default(omit) }}"
+    enabled: "{{ item.enabled | default(omit) }}"
+    tls_skip_verify: "{{ item.tls_skip_verify | default(omit) }}"
+    server_insecure: "{{ item.server_insecure | default(omit) }}"
+    server_starttls: "{{ item.server_starttls | default(omit) }}"
+    state: "{{ item.state | default('present') }}"
+  loop: "{{ aistor_admin_ldap_providers }}"
+  loop_control: {label: "{{ item.name | default('_') }}"}
+  register: aistor_admin_ldap_reconciliation
+  notify: Apply AIStor LDAP configuration changes
+  when: aistor_admin_manage | bool
+  no_log: true
+
+- name: Apply or report AIStor LDAP configuration changes
+  ansible.builtin.meta: flush_handlers
+  when:
+    - aistor_admin_manage | bool
+    - aistor_admin_ldap_providers | length > 0
+
 - name: Reconcile AIStor policy bindings
   dagoldfish.minio.minio_policy_binding:
     auth: "{{ aistor_admin_auth }}"
@@ -72,7 +105,12 @@
     state: "{{ item.state | default('present') }}"
   loop: "{{ aistor_admin_policy_bindings }}"
   loop_control: {label: "{{ item.user | default(item.group | default('binding')) }}"}
-  when: aistor_admin_manage | bool
+  when:
+    - aistor_admin_manage | bool
+    - >-
+      item.identity_provider | default('builtin') != 'ldap' or
+      aistor_admin_restart_on_ldap_change | bool or
+      aistor_admin_ldap_reconciliation is not changed
 
 - name: Reconcile AIStor site replication
   dagoldfish.minio.minio_site_replication:
