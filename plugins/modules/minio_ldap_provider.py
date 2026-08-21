@@ -123,6 +123,11 @@ def _config_key(name):
     return "identity_ldap" if name == "_" else f"identity_ldap:{name}"
 
 
+def _read_config_key(name):
+    """Return a target-scoped key; a bare subsystem read returns all targets."""
+    return "identity_ldap:" if name == "_" else f"identity_ldap:{name}"
+
+
 def _strip_quotes(value):
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
@@ -160,6 +165,9 @@ def _read_current(client, key, is_default):
         raise
     # The default target always exists in the server configuration with empty defaults.
     exists = bool(current.get("server_addr")) if is_default else True
+    # The Admin API omits enable=on from its serialized configuration output.
+    if exists and "enable" not in current:
+        current["enable"] = "on"
     return exists, current
 
 
@@ -179,7 +187,7 @@ def run(module, client):
     params = module.params
     name = params["name"]
     key = _config_key(name)
-    exists, current = _read_current(client, key, name == "_")
+    exists, current = _read_current(client, _read_config_key(name), name == "_")
 
     if params["state"] == "absent":
         if not exists:

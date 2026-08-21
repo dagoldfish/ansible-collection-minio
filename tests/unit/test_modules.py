@@ -407,7 +407,7 @@ LDAP_CONFIG = (
     "lookup_bind_dn=cn=minio,ou=services,dc=example,dc=com "
     "lookup_bind_password=*redacted* "
     "user_dn_search_base_dn=ou=users,dc=example,dc=com "
-    "user_dn_search_filter=(uid=%s) enable=on tls_skip_verify=off "
+    "user_dn_search_filter=(uid=%s) tls_skip_verify=off "
     "server_insecure=off server_starttls=off comment=Primary directory service"
 )
 
@@ -421,7 +421,8 @@ def test_ldap_provider_is_idempotent_and_parses_values_with_spaces():
     assert out["restart_required"] is False
     assert out["provider"]["comment"] == "Primary directory service"
     assert "lookup_bind_password" not in out["provider"]
-    assert client.calls == [("get", "identity_ldap")]
+    assert out["provider"]["enabled"] is True
+    assert client.calls == [("get", "identity_ldap:")]
 
 
 def test_ldap_provider_create_named_and_normalize_booleans():
@@ -464,7 +465,7 @@ def test_ldap_provider_password_rotation_is_explicit_and_check_safe():
     rotate = ldap_params(lookup_bind_password="new-secret", update_bind_password=True)
     out = result(mod.run, Module(rotate, True), client)
     assert out["changed"] is True
-    assert client.calls == [("get", "identity_ldap"), ("get", "identity_ldap")]
+    assert client.calls == [("get", "identity_ldap:"), ("get", "identity_ldap:")]
 
 
 def test_ldap_provider_delete_and_absent_noop():
@@ -478,6 +479,22 @@ def test_ldap_provider_delete_and_absent_noop():
     out = result(mod.run, Module(ldap_params(name="partners", state="absent")), missing)
     assert out["changed"] is False
     assert missing.calls == [("get", "identity_ldap:partners")]
+
+
+def test_ldap_default_read_is_isolated_from_named_providers():
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+
+    class MultipleProviders(LdapProviders):
+        def config_get(self, key):
+            self.calls.append(("get", key))
+            if key == "identity_ldap:":
+                return "identity_ldap enable=off server_addr="
+            return LDAP_CONFIG + "\nidentity_ldap:partners server_addr=ldap.partners.example.com:636 enable=on"
+
+    client = MultipleProviders()
+    out = result(mod.run, Module(ldap_params(state="absent")), client)
+    assert out["changed"] is False
+    assert client.calls == [("get", "identity_ldap:")]
 
 
 def test_ldap_provider_requires_create_fields_and_rotation_password():
