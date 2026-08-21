@@ -38,6 +38,7 @@ safe by default because `aistor_admin_manage` is `false`.
 | --- | --- | --- |
 | `aistor_admin_manage` | `false` | Enable API reads and reconciliation |
 | `aistor_admin_auth` | `{}` | Shared administrator connection dictionary |
+| `aistor_admin_buckets` | `[]` | Buckets to create or remove |
 | `aistor_admin_policies` | `[]` | IAM policies to reconcile |
 | `aistor_admin_users` | `[]` | Local users to reconcile |
 | `aistor_admin_groups` | `[]` | Local groups and memberships to reconcile |
@@ -54,6 +55,14 @@ the transport itself is controlled by `secure`.
 
 Never place credentials in inventory committed to source control. Use Ansible
 Vault, environment lookups, or a dedicated secret provider.
+
+### Buckets
+
+Each `aistor_admin_buckets` item accepts `name`, `region`, `object_lock`, and
+`state` (`present` by default). Region and object-lock settings apply only when
+creating a bucket and are not changed on an existing bucket. `state: absent`
+removes only an empty bucket; the SDK returns an error rather than deleting
+objects from a non-empty bucket.
 
 ### Policies
 
@@ -101,9 +110,10 @@ the complete topology requires `state: absent`, `force: true`,
 
 ## Ordering and idempotency
 
-The role reconciles policies, users, groups, service accounts, policy bindings,
-and finally site replication. This permits later resources to reference earlier
-ones. Empty resource lists are no-ops, and undeclared resources are not purged.
+The role reconciles buckets, policies, users, groups, service accounts, policy
+bindings, and finally site replication. This permits policies and later
+resources to reference earlier ones. Empty resource lists are no-ops, and
+undeclared resources are not purged.
 
 Run with `--check` to preview all supported changes. The role intentionally
 fails on LDAP binding operations in check mode instead of claiming an

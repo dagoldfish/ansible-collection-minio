@@ -2,6 +2,13 @@
 
 All notable changes to `dagoldfish.minio` are documented in this file.
 
+## Unreleased
+
+### Added
+
+- Create buckets and safely remove empty buckets through the official Python SDK.
+- Reconcile buckets before policies with the `aistor_admin` role.
+
 ## 0.1.1 - 2026-08-21
 
 ### Fixed

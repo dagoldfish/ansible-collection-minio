@@ -2,6 +2,7 @@
 requires_ansible: ">=2.14.18"
 action_groups:
   minio:
+    - minio_bucket
     - minio_group
     - minio_policy
     - minio_policy_binding

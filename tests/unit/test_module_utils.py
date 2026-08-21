@@ -65,6 +65,40 @@ def test_admin_client_normalizes_endpoint_and_passes_tls_options(monkeypatch):
     }
 
 
+def test_s3_client_normalizes_endpoint_and_passes_tls_options(monkeypatch):
+    helpers = importlib.import_module(MODULE)
+    calls = {}
+
+    def client(**kwargs):
+        calls["client"] = kwargs
+        return "client"
+
+    monkeypatch.setattr(helpers, "MINIO_IMP_ERR", None)
+    monkeypatch.setattr(helpers, "Minio", client)
+    module = Module(
+        {
+            "auth": {
+                "endpoint": "https://aistor.example.com:9000/",
+                "access_key": "admin",
+                "secret_key": "secret",
+                "region": "",
+                "secure": True,
+                "validate_certs": False,
+            }
+        }
+    )
+
+    assert helpers.s3_client(module) == "client"
+    assert calls["client"] == {
+        "endpoint": "aistor.example.com:9000",
+        "access_key": "admin",
+        "secret_key": "secret",
+        "region": None,
+        "secure": True,
+        "cert_check": False,
+    }
+
+
 def test_json_helpers_accept_sdk_strings_and_stabilize_policies():
     helpers = importlib.import_module(MODULE)
     assert helpers.parse_json('{"answer": 42}') == {"answer": 42}
