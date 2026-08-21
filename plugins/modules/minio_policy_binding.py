@@ -50,11 +50,27 @@ policies: {description: Policies targeted by this operation., returned: always, 
 """
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.dagoldfish.minio.plugins.module_utils.minio_admin import (
+    MinioAdminException,
     admin_client,
     auth_argument_spec,
     fail_from_exception,
     parse_json,
 )
+
+
+def _is_ldap_policy_binding_noop(error, state):
+    """Return whether an LDAP policy error means the requested state already exists."""
+    if not isinstance(error, MinioAdminException):
+        return False
+    body = str(getattr(error, "_body", "")).casefold()
+    if "policy" not in body:
+        return False
+    phrases = (
+        ("already attached", "already bound", "already associated", "already mapped")
+        if state == "present"
+        else ("not attached", "not bound", "not associated", "not mapped", "no policy association")
+    )
+    return any(phrase in body for phrase in phrases)
 
 
 def run(module, client):
@@ -66,10 +82,19 @@ def run(module, client):
             msg="LDAP policy bindings do not support check mode because minio-py has no LDAP policy-entity read API"
         )
     if ldap:
-        method = client.attach_policy_ldap if module.params["state"] == "present" else client.detach_policy_ldap
-        response = parse_json(method(policies, **target), {}) or {}
-        key = "policiesAttached" if module.params["state"] == "present" else "policiesDetached"
-        module.exit_json(changed=bool(response.get(key)), policies=policies)
+        state = module.params["state"]
+        method = client.attach_policy_ldap if state == "present" else client.detach_policy_ldap
+        key = "policiesAttached" if state == "present" else "policiesDetached"
+        changed = False
+        for policy in policies:
+            try:
+                response = parse_json(method([policy], **target), {}) or {}
+            except Exception as error:
+                if _is_ldap_policy_binding_noop(error, state):
+                    continue
+                raise
+            changed = bool(response.get(key)) or changed
+        module.exit_json(changed=changed, policies=policies)
     entities = (
         parse_json(
             client.get_policy_entities(

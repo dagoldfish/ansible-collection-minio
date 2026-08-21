@@ -64,7 +64,9 @@ credentials in environment variables, Ansible Vault, or another secret lookup.
 
 Preview supported operations with `--check` before applying them. LDAP policy
 bindings are the exception: minio-py cannot read them back, so those operations
-fail clearly in check mode.
+fail clearly in check mode. During normal runs, repeated LDAP attach and detach
+operations are treated as successful no-ops when the server reports that the
+requested binding state is already satisfied.
 
 See [the role documentation](roles/aistor_admin/README.md) for every variable,
 resource shape, reconciliation order, and destructive-operation safeguard. The
