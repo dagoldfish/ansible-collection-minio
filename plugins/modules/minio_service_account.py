@@ -27,7 +27,7 @@ options:
       validate_certs: {description: Validate TLS certificates., type: bool, default: true}
       region: {description: Signing region., type: str, default: ""}
   access_key: {type: str, required: true, description: Service-account access key.}
-  secret_key: {type: str, description: Secret for creation or rotation.}
+  secret_key: {type: str, description: Secret for creation or rotation; must contain 8 through 40 characters.}
   name: {type: str, description: Display name.}
   description: {type: str, description: Description.}
   policy: {type: dict, description: Embedded policy document.}
@@ -63,6 +63,9 @@ from ansible_collections.dagoldfish.minio.plugins.module_utils.minio_admin impor
 
 def run(module, client):
     key = module.params["access_key"]
+    secret_key = module.params["secret_key"]
+    if module.params["state"] == "present" and secret_key is not None and not 8 <= len(secret_key) <= 40:
+        module.fail_json(msg="secret_key length must be between 8 and 40 characters")
     try:
         current = parse_json(client.get_service_account(key), {}) or {}
     except Exception as error:
@@ -96,7 +99,11 @@ def run(module, client):
         ("expiration", "expiration"),
         ("status", "status"),
     ):
-        if module.params[param] is not None and module.params[param] != current.get(field):
+        current_value = current.get(field)
+        if param == "status":
+            current_value = current.get("status", current.get("accountStatus"))
+            current_value = {"on": "enabled", "off": "disabled"}.get(current_value, current_value)
+        if module.params[param] is not None and module.params[param] != current_value:
             updates[param] = module.params[param]
     if module.params["policy"] is not None and canonical_json(module.params["policy"]) != canonical_json(
         current.get("policy", {})

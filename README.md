@@ -1,10 +1,12 @@
 # `dagoldfish.minio`
 
-Manage MinIO AIStor identities, policies, and site replication with Ansible and
-the official Python SDK.
+Manage MinIO AIStor buckets, identities, LDAP providers, policies, service
+operations, and site replication with Ansible and the official Python SDK. The
+LDAP provider module adds a narrowly scoped signed adapter for the dedicated IDP
+Admin API that minio-py 7.2.20 does not expose.
 
 The collection is aimed at operators who want declarative, reviewable AIStor
-administration. It includes seven modules and the `aistor_admin` role, which
+administration. It includes ten modules and the `aistor_admin` role, which
 applies them in a safe dependency order.
 
 ## Install
@@ -77,10 +79,13 @@ resources while remaining disabled unless `AISTOR_MANAGE=true`.
 
 | Content | Purpose |
 | --- | --- |
+| `minio_bucket` | Create buckets and remove empty buckets |
 | `minio_user` | Create, rotate, enable, disable, and remove local users |
 | `minio_group` | Manage local groups, membership, and status |
+| `minio_ldap_provider` | Reconcile default and named LDAP identity providers |
 | `minio_policy` | Reconcile IAM policy documents |
 | `minio_policy_binding` | Attach or detach built-in and LDAP policies |
+| `minio_service` | Restart the AIStor service through the Admin API |
 | `minio_service_account` | Manage service accounts and explicit secret rotation |
 | `minio_site_replication` | Add, edit, or explicitly remove replication peers |
 | `minio_site_replication_info` | Read topology and detailed status |
@@ -97,11 +102,20 @@ so shared module defaults can be defined once when appropriate.
 
 ## Behavior and limitations
 
+- Bucket region and object-lock settings apply only at creation. Existing
+  buckets are preserved, and deletion fails safely when a bucket is not empty.
 - Existing unreadable user and service-account secrets are preserved. Set
   `update_secret: true` to rotate one intentionally.
+- LDAP bind passwords are also unreadable. Set `update_bind_password: true` to
+  rotate one intentionally. LDAP configuration changes require an AIStor
+  restart; the role reports this by default and can restart automatically.
+- AIStor environment variables override SDK-managed LDAP configuration.
 - Groups add declared members by default. Set `purge_members: true` to remove
   undeclared members.
 - Site replication never purges undeclared peers during `state: present`.
+- MinIO site replication does not replicate service accounts owned by the root
+  user. Service accounts created while these modules authenticate as root stay
+  local to the site where they were created.
 - Replication removal requires `state: absent` and `force: true`; complete
   topology removal additionally requires `remove_all: true` with an empty
   `sites` list.

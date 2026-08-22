@@ -1,0 +1,16 @@
+---
+- name: Restart AIStor after LDAP configuration changes
+  dagoldfish.minio.minio_service:
+    auth: "{{ aistor_admin_auth }}"
+    action: restart
+  listen: Apply AIStor LDAP configuration changes
+  when: aistor_admin_restart_on_ldap_change | bool
+  no_log: true
+
+- name: Report pending AIStor restart
+  ansible.builtin.debug:
+    msg: >-
+      LDAP configuration changed. Restart the AIStor service and run the role
+      again to reconcile any deferred LDAP policy bindings.
+  listen: Apply AIStor LDAP configuration changes
+  when: not (aistor_admin_restart_on_ldap_change | bool)

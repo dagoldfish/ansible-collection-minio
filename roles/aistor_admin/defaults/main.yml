@@ -1,9 +1,12 @@
 ---
 aistor_admin_manage: false
 aistor_admin_auth: {}
+aistor_admin_buckets: []
 aistor_admin_policies: []
 aistor_admin_users: []
 aistor_admin_groups: []
 aistor_admin_service_accounts: []
+aistor_admin_ldap_providers: []
+aistor_admin_restart_on_ldap_change: false
 aistor_admin_policy_bindings: []
 aistor_admin_site_replication: {}
