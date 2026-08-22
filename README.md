@@ -1,7 +1,9 @@
 # `dagoldfish.minio`
 
 Manage MinIO AIStor buckets, identities, LDAP providers, policies, service
-operations, and site replication with Ansible and the official Python SDK.
+operations, and site replication with Ansible and the official Python SDK. The
+LDAP provider module adds a narrowly scoped signed adapter for the dedicated IDP
+Admin API that minio-py 7.2.20 does not expose.
 
 The collection is aimed at operators who want declarative, reviewable AIStor
 administration. It includes ten modules and the `aistor_admin` role, which
@@ -111,6 +113,9 @@ so shared module defaults can be defined once when appropriate.
 - Groups add declared members by default. Set `purge_members: true` to remove
   undeclared members.
 - Site replication never purges undeclared peers during `state: present`.
+- MinIO site replication does not replicate service accounts owned by the root
+  user. Service accounts created while these modules authenticate as root stay
+  local to the site where they were created.
 - Replication removal requires `state: absent` and `force: true`; complete
   topology removal additionally requires `remove_all: true` with an empty
   `sites` list.
