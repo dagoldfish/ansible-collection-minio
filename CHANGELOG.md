@@ -2,6 +2,16 @@
 
 All notable changes to `dagoldfish.minio` are documented in this file.
 
+## 0.2.2 - 2026-09-03
+
+### Fixed
+
+- Treat AIStor's `XMinioAdminNoSuchConfigTarget` response as an absent LDAP
+  provider so the provider can be created declaratively.
+- Wait for the signed AIStor Admin info endpoint after LDAP-triggered restarts,
+  retrying transient connection failures, HTTP 5xx responses, and nginx HTTP
+  403 responses with configurable delay and timeout values.
+
 ## 0.2.1 - 2026-08-21
 
 ### Fixed

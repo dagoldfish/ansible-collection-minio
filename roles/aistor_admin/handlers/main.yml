@@ -3,6 +3,9 @@
   dagoldfish.minio.minio_service:
     auth: "{{ aistor_admin_auth }}"
     action: restart
+    wait_for_ready: true
+    readiness_delay: "{{ aistor_admin_restart_readiness_delay }}"
+    readiness_timeout: "{{ aistor_admin_restart_readiness_timeout }}"
   listen: Apply AIStor LDAP configuration changes
   when: aistor_admin_restart_on_ldap_change | bool
   no_log: true

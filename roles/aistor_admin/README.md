@@ -45,6 +45,8 @@ safe by default because `aistor_admin_manage` is `false`.
 | `aistor_admin_service_accounts` | `[]` | Service accounts to reconcile |
 | `aistor_admin_ldap_providers` | `[]` | Default or named LDAP providers to reconcile |
 | `aistor_admin_restart_on_ldap_change` | `false` | Restart AIStor after LDAP changes |
+| `aistor_admin_restart_readiness_delay` | `5` | Seconds between post-restart readiness attempts |
+| `aistor_admin_restart_readiness_timeout` | `180` | Maximum seconds to wait for AIStor readiness |
 | `aistor_admin_policy_bindings` | `[]` | Built-in or LDAP bindings to reconcile |
 | `aistor_admin_site_replication` | `{}` | Optional replication operation |
 
@@ -111,8 +113,12 @@ AIStor redacts the lookup-bind password when reading configuration. Set
 LDAP changes require a service restart. By default the role reports the pending
 restart and defers LDAP policy bindings; set
 `aistor_admin_restart_on_ldap_change: true` to restart once through the SDK and
-continue reconciliation. Server environment variables override configuration
-stored through the Admin API.
+wait for the signed Admin info endpoint to recover before continuing
+reconciliation. Connection errors, HTTP 5xx responses, and temporary HTTP 403
+responses (including those returned by nginx) are retried. Tune the delay and
+overall deadline with `aistor_admin_restart_readiness_delay` and
+`aistor_admin_restart_readiness_timeout`. Server environment variables override
+configuration stored through the Admin API.
 
 ### Policy bindings
 

@@ -618,6 +618,59 @@ def test_ldap_provider_creates_missing_default_through_dedicated_api():
     assert "lookup_bind_password" not in out["provider"]
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"Code":"XMinioAdminNoSuchConfigTarget","Message":"unexpected wording"}',
+        '{"Code":"UnexpectedCode","Message":"No such named configuration target exists"}',
+        (
+            '{"Code":"XMinioAdminNoSuchConfigTarget",'
+            '"Message":"No such named configuration target exists"}'
+        ),
+    ],
+)
+def test_ldap_provider_recognizes_missing_named_configuration_target(body):
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+    assert mod._is_missing(MinioAdminException("400", body)) is True
+
+
+def test_ldap_provider_creates_after_missing_target_bad_request():
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+
+    class MissingTargetProviders(LdapProviders):
+        def get_idp_config(self, config_type, name):
+            self.calls.append(("get", config_type, name))
+            raise MinioAdminException(
+                "400",
+                (
+                    '{"Code":"XMinioAdminNoSuchConfigTarget",'
+                    '"Message":"No such named configuration target exists"}'
+                ),
+            )
+
+    params = ldap_params(
+        server_addr="ldap.example.com:636",
+        lookup_bind_dn="cn=minio,dc=example",
+        lookup_bind_password="bind-password",
+        user_dn_search_base_dn="ou=users,dc=example",
+        user_dn_search_filter="(uid=%s)",
+    )
+    client = MissingTargetProviders()
+
+    out = result(mod.run, Module(params), client)
+
+    assert out["changed"] is True
+    assert out["restart_required"] is True
+    assert [call[0] for call in client.calls] == ["get", "set"]
+    assert "lookup_bind_password" not in out["provider"]
+
+
+def test_ldap_provider_does_not_hide_other_bad_requests():
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+    error = MinioAdminException("400", '{"Code":"InvalidRequest","Message":"invalid LDAP filter"}')
+    assert mod._is_missing(error) is False
+
+
 def test_ldap_provider_updates_existing_provider_through_dedicated_api():
     mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
     client = LdapProviders(LDAP_CONFIG)
@@ -674,20 +727,73 @@ def test_ldap_provider_requires_create_fields_and_rotation_password():
 
 
 class Services:
-    def __init__(self):
+    def __init__(self, readiness=None):
         self.calls = []
+        self.readiness = iter(readiness or ["ready"])
 
     def service_restart(self):
         self.calls.append("restart")
         return "restarting"
 
+    def info(self):
+        self.calls.append("info")
+        outcome = next(self.readiness)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
 
 def test_service_restart_and_check_mode():
     mod = importlib.import_module(f"{BASE}.minio_service")
     client = Services()
-    assert result(mod.run, Module({"action": "restart"}), client)["response"] == "restarting"
-    assert result(mod.run, Module({"action": "restart"}, True), client)["response"] == ""
+    params = {"action": "restart", "wait_for_ready": False, "readiness_delay": 5, "readiness_timeout": 180}
+    assert result(mod.run, Module(params), client)["response"] == "restarting"
+    assert result(mod.run, Module(params, True), client)["response"] == ""
     assert client.calls == ["restart"]
+
+
+def test_service_readiness_retries_temporary_403_5xx_and_connection_failures():
+    mod = importlib.import_module(f"{BASE}.minio_service")
+    client = Services(
+        [
+            MinioAdminException("403", "nginx is restarting"),
+            OSError("connection refused"),
+            MinioAdminException("503", "service unavailable"),
+            "ready",
+        ]
+    )
+    sleeps = []
+    ticks = iter([0, 1, 2, 3, 4, 5, 6])
+
+    mod._wait_until_ready(client, delay=2, timeout=30, sleep=sleeps.append, monotonic=lambda: next(ticks))
+
+    assert client.calls == ["info", "info", "info", "info"]
+    assert sleeps == [2, 2, 2]
+
+
+def test_service_readiness_does_not_retry_permanent_admin_errors():
+    mod = importlib.import_module(f"{BASE}.minio_service")
+    client = Services([MinioAdminException("401", "invalid credentials")])
+
+    with pytest.raises(MinioAdminException):
+        mod._wait_until_ready(client, delay=0, timeout=30)
+    assert client.calls == ["info"]
+
+
+def test_service_restart_waits_for_readiness_but_check_mode_does_not(monkeypatch):
+    mod = importlib.import_module(f"{BASE}.minio_service")
+    params = {"action": "restart", "wait_for_ready": True, "readiness_delay": 0, "readiness_timeout": 30}
+    client = Services()
+    monkeypatch.setattr(mod, "_wait_until_ready", lambda actual, delay, timeout: actual.info())
+
+    out = result(mod.run, Module(params), client)
+    assert out["ready"] is True
+    assert client.calls == ["restart", "info"]
+
+    check_client = Services()
+    out = result(mod.run, Module(params, True), check_client)
+    assert out["ready"] is False
+    assert check_client.calls == []
 
 
 class ServiceAccounts:
