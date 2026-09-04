@@ -9,9 +9,11 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 import json
+import os
 import traceback
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import timedelta
 from io import BytesIO
 from typing import Any, Optional
 
@@ -21,12 +23,15 @@ __all__ = ("PeerInfo", "PeerSite", "SiteReplicationStatusOptions")
 
 MINIO_IMP_ERR = None
 try:
+    import certifi
     from minio import Minio, MinioAdmin
     from minio.credentials import StaticProvider
     from minio.crypto import decrypt, encrypt
     from minio.error import MinioAdminException
     from minio.minioadmin import PeerInfo, PeerSite, SiteReplicationStatusOptions
+    from urllib3 import PoolManager, Retry
     from urllib3.exceptions import HTTPError
+    from urllib3.util import Timeout
 except ImportError:
     MINIO_IMP_ERR = traceback.format_exc()
     Minio = None  # type: ignore[assignment,misc]
@@ -39,6 +44,9 @@ except ImportError:
     PeerSite = None  # type: ignore[assignment,misc]
     PeerInfo = None  # type: ignore[assignment,misc]
     SiteReplicationStatusOptions = None  # type: ignore[assignment,misc]
+    PoolManager = None  # type: ignore[assignment,misc]
+    Retry = None  # type: ignore[assignment,misc]
+    Timeout = None  # type: ignore[assignment,misc]
 
 
 def auth_argument_spec() -> dict[str, Any]:
@@ -57,7 +65,28 @@ def auth_argument_spec() -> dict[str, Any]:
     }
 
 
-def admin_client(module: Any) -> Any:
+def _single_attempt_admin_http_client(cert_check: bool) -> Any:
+    """Build an SDK-compatible pool that leaves retries to the Ansible module."""
+    timeout = timedelta(minutes=5).seconds
+    return PoolManager(
+        timeout=Timeout(connect=timeout, read=timeout),
+        maxsize=10,
+        cert_reqs="CERT_REQUIRED" if cert_check else "CERT_NONE",
+        ca_certs=os.environ.get("SSL_CERT_FILE") or certifi.where(),
+        retries=Retry(
+            total=0,
+            connect=0,
+            read=0,
+            redirect=0,
+            status=0,
+            other=0,
+            status_forcelist=[500, 502, 503, 504],
+            raise_on_status=False,
+        ),
+    )
+
+
+def admin_client(module: Any, *, preserve_error_response: bool = False) -> Any:
     """Build the official SDK admin client from module parameters."""
     if MINIO_IMP_ERR:
         module.fail_json(
@@ -66,12 +95,21 @@ def admin_client(module: Any) -> Any:
         )
     auth = module.params["auth"]
     endpoint = auth["endpoint"].removeprefix("https://").removeprefix("http://").rstrip("/")
+    options = {
+        "endpoint": endpoint,
+        "credentials": StaticProvider(auth["access_key"], auth["secret_key"]),
+        "region": auth["region"],
+        "secure": auth["secure"],
+        "cert_check": auth["validate_certs"],
+    }
+    if preserve_error_response:
+        # MinioAdmin's default pool retries 5xx responses, including PUT, and
+        # can replace the server's useful response with a MaxRetryError. The
+        # site-replication module owns retries so it can inspect topology after
+        # an ambiguous add and retain the original Admin API error body.
+        options["http_client"] = _single_attempt_admin_http_client(auth["validate_certs"])
     return MinioAdmin(
-        endpoint=endpoint,
-        credentials=StaticProvider(auth["access_key"], auth["secret_key"]),
-        region=auth["region"],
-        secure=auth["secure"],
-        cert_check=auth["validate_certs"],
+        **options,
     )
 
 

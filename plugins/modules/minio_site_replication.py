@@ -284,7 +284,7 @@ def main():
         supports_check_mode=True,
     )
     try:
-        run(module, admin_client(module))
+        run(module, admin_client(module, preserve_error_response=True))
     except Exception as error:
         fail_from_exception(module, error)
 
