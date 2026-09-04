@@ -9,6 +9,8 @@
   and synchronization settings, as required by current AIStor servers.
 - Preserve site-replication HTTP 5xx response bodies instead of allowing the
   SDK transport to replace them with an opaque retry-exhaustion exception.
+- Preserve the final Admin API HTTP 5xx response after normal SDK retries so
+  all administration modules report the server's diagnostic body.
 
 All notable changes to `dagoldfish.minio` are documented in this file.
 
