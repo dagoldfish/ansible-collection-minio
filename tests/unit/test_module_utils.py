@@ -11,7 +11,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
-from minio.error import MinioAdminException
+from minio.error import MinioAdminException, S3Error
 
 MODULE = "ansible_collections.dagoldfish.minio.plugins.module_utils.minio_admin"
 
@@ -185,7 +185,7 @@ def test_admin_http_client_preserves_final_503_body_after_retries():
             endpoint=f"127.0.0.1:{server.server_port}",
             credentials=helpers.StaticProvider("admin", "secret"),
             secure=False,
-            http_client=helpers._admin_http_client(cert_check=False, retries=2),
+            http_client=helpers._sdk_http_client(cert_check=False, retries=2),
         )
         with pytest.raises(MinioAdminException) as caught:
             client.info()
@@ -200,12 +200,18 @@ def test_admin_http_client_preserves_final_503_body_after_retries():
 def test_s3_client_normalizes_endpoint_and_passes_tls_options(monkeypatch):
     helpers = importlib.import_module(MODULE)
     calls = {}
+    pool = object()
 
     def client(**kwargs):
         calls["client"] = kwargs
         return "client"
 
+    def pool_manager(**kwargs):
+        calls["pool"] = kwargs
+        return pool
+
     monkeypatch.setattr(helpers, "MINIO_IMP_ERR", None)
+    monkeypatch.setattr(helpers, "PoolManager", pool_manager)
     monkeypatch.setattr(helpers, "Minio", client)
     module = Module(
         {
@@ -228,7 +234,54 @@ def test_s3_client_normalizes_endpoint_and_passes_tls_options(monkeypatch):
         "region": None,
         "secure": True,
         "cert_check": False,
+        "http_client": pool,
     }
+    retry = calls["pool"]["retries"]
+    assert retry.total == 5
+    assert retry.raise_on_status is False
+
+
+def test_s3_http_client_preserves_final_503_error_after_retries():
+    helpers = importlib.import_module(MODULE)
+
+    class Handler(BaseHTTPRequestHandler):
+        attempts = 0
+
+        def do_GET(self):
+            Handler.attempts += 1
+            body = (
+                f"<Error><Code>SlowDown</Code><Message>attempt {Handler.attempts}</Message>"
+                "<Resource>/</Resource><RequestId>request-three</RequestId></Error>"
+            ).encode()
+            self.send_response(503)
+            self.send_header("Content-Type", "application/xml")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        client = helpers.Minio(
+            endpoint=f"127.0.0.1:{server.server_port}",
+            access_key="admin",
+            secret_key="secret",
+            secure=False,
+            http_client=helpers._sdk_http_client(cert_check=False, retries=2),
+        )
+        with pytest.raises(S3Error) as caught:
+            client.list_buckets()
+        assert caught.value.code == "SlowDown"
+        assert caught.value.message == "attempt 3"
+        assert caught.value.request_id == "request-three"
+        assert Handler.attempts == 3
+    finally:
+        server.shutdown()
+        thread.join()
 
 
 def test_signed_ldap_idp_adapter_uses_current_dedicated_routes(monkeypatch):
