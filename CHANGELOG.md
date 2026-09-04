@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.3-dev.1 - 2026-09-04
 
 - Retry transient site-replication topology reads and additions, verifying the
   topology before resubmitting an add whose response may have been lost.
