@@ -13,6 +13,8 @@
   all administration modules report the server's diagnostic body.
 - Preserve the final S3 HTTP 5xx response after normal SDK retries so bucket
   failures retain the server's error code, message, and request identifier.
+- Return structured status, code, message, and request details for SDK failures,
+  with explicit redaction of nested site-replication credentials.
 
 All notable changes to `dagoldfish.minio` are documented in this file.
 
