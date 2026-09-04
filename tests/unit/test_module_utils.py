@@ -31,6 +31,7 @@ class Module:
 def test_admin_client_normalizes_endpoint_and_passes_tls_options(monkeypatch):
     helpers = importlib.import_module(MODULE)
     calls = {}
+    pool = object()
 
     def provider(access_key, secret_key):
         calls["credentials"] = (access_key, secret_key)
@@ -40,8 +41,13 @@ def test_admin_client_normalizes_endpoint_and_passes_tls_options(monkeypatch):
         calls["client"] = kwargs
         return "client"
 
+    def pool_manager(**kwargs):
+        calls["pool"] = kwargs
+        return pool
+
     monkeypatch.setattr(helpers, "MINIO_IMP_ERR", None)
     monkeypatch.setattr(helpers, "StaticProvider", provider)
+    monkeypatch.setattr(helpers, "PoolManager", pool_manager)
     monkeypatch.setattr(helpers, "MinioAdmin", client)
     module = Module(
         {
@@ -64,7 +70,14 @@ def test_admin_client_normalizes_endpoint_and_passes_tls_options(monkeypatch):
         "region": "eu-west-1",
         "secure": True,
         "cert_check": False,
+        "http_client": pool,
     }
+    assert calls["pool"]["cert_reqs"] == "CERT_NONE"
+    retry = calls["pool"]["retries"]
+    assert retry.total == 5
+    assert retry.backoff_factor == 0.2
+    assert retry.raise_on_status is False
+    assert retry.status_forcelist == [500, 502, 503, 504]
 
 
 def test_admin_client_can_preserve_admin_error_responses(monkeypatch):
@@ -102,9 +115,6 @@ def test_admin_client_can_preserve_admin_error_responses(monkeypatch):
     assert calls["pool"]["cert_reqs"] == "CERT_REQUIRED"
     retry = calls["pool"]["retries"]
     assert retry.total == 0
-    assert retry.connect == 0
-    assert retry.read == 0
-    assert retry.status == 0
     assert retry.raise_on_status is False
     assert retry.status_forcelist == [500, 502, 503, 504]
 
@@ -144,6 +154,44 @@ def test_single_attempt_admin_http_client_preserves_first_503_body():
         assert caught.value._code == "503"
         assert caught.value._body == '{"Code":"PeerError","Message":"peer rejected configuration"}'
         assert Handler.attempts == 1
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_admin_http_client_preserves_final_503_body_after_retries():
+    helpers = importlib.import_module(MODULE)
+
+    class Handler(BaseHTTPRequestHandler):
+        attempts = 0
+
+        def do_GET(self):
+            Handler.attempts += 1
+            body = f'{{"Code":"PeerError","Message":"attempt {Handler.attempts}"}}'.encode()
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        client = helpers.MinioAdmin(
+            endpoint=f"127.0.0.1:{server.server_port}",
+            credentials=helpers.StaticProvider("admin", "secret"),
+            secure=False,
+            http_client=helpers._admin_http_client(cert_check=False, retries=2),
+        )
+        with pytest.raises(MinioAdminException) as caught:
+            client.info()
+        assert caught.value._code == "503"
+        assert caught.value._body == '{"Code":"PeerError","Message":"attempt 3"}'
+        assert Handler.attempts == 3
     finally:
         server.shutdown()
         thread.join()

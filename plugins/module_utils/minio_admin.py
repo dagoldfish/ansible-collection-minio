@@ -65,8 +65,8 @@ def auth_argument_spec() -> dict[str, Any]:
     }
 
 
-def _single_attempt_admin_http_client(cert_check: bool) -> Any:
-    """Build an SDK-compatible pool that leaves retries to the Ansible module."""
+def _admin_http_client(cert_check: bool, *, retries: int = 5) -> Any:
+    """Build a pool that returns the final HTTP response after SDK retries."""
     timeout = timedelta(minutes=5).seconds
     return PoolManager(
         timeout=Timeout(connect=timeout, read=timeout),
@@ -74,16 +74,17 @@ def _single_attempt_admin_http_client(cert_check: bool) -> Any:
         cert_reqs="CERT_REQUIRED" if cert_check else "CERT_NONE",
         ca_certs=os.environ.get("SSL_CERT_FILE") or certifi.where(),
         retries=Retry(
-            total=0,
-            connect=0,
-            read=0,
-            redirect=0,
-            status=0,
-            other=0,
+            total=retries,
+            backoff_factor=0.2,
             status_forcelist=[500, 502, 503, 504],
             raise_on_status=False,
         ),
     )
+
+
+def _single_attempt_admin_http_client(cert_check: bool) -> Any:
+    """Build an SDK-compatible pool that leaves retries to the Ansible module."""
+    return _admin_http_client(cert_check, retries=0)
 
 
 def admin_client(module: Any, *, preserve_error_response: bool = False) -> Any:
@@ -101,6 +102,7 @@ def admin_client(module: Any, *, preserve_error_response: bool = False) -> Any:
         "region": auth["region"],
         "secure": auth["secure"],
         "cert_check": auth["validate_certs"],
+        "http_client": _admin_http_client(auth["validate_certs"]),
     }
     if preserve_error_response:
         # MinioAdmin's default pool retries 5xx responses, including PUT, and
