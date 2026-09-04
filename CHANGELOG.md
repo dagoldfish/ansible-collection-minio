@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.2.3-dev.3 - 2026-09-04
+All notable changes to `dagoldfish.minio` are documented in this file.
+
+## 0.2.3 - 2026-09-05
+
+### Fixed
 
 - Retry transient site-replication topology reads, additions, edits, and
   removals, verifying the topology before resubmitting an add whose response
@@ -15,8 +19,6 @@
   failures retain the server's error code, message, and request identifier.
 - Return structured status, code, message, and request details for SDK failures,
   with explicit redaction of nested site-replication credentials.
-
-All notable changes to `dagoldfish.minio` are documented in this file.
 
 ## 0.2.2 - 2026-09-03
 
