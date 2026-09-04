@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import importlib
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from minio.error import MinioAdminException
@@ -63,6 +65,88 @@ def test_admin_client_normalizes_endpoint_and_passes_tls_options(monkeypatch):
         "secure": True,
         "cert_check": False,
     }
+
+
+def test_admin_client_can_preserve_admin_error_responses(monkeypatch):
+    helpers = importlib.import_module(MODULE)
+    calls = {}
+    pool = object()
+
+    def pool_manager(**kwargs):
+        calls["pool"] = kwargs
+        return pool
+
+    def client(**kwargs):
+        calls["client"] = kwargs
+        return "client"
+
+    monkeypatch.setattr(helpers, "MINIO_IMP_ERR", None)
+    monkeypatch.setattr(helpers, "StaticProvider", lambda access_key, secret_key: "credentials")
+    monkeypatch.setattr(helpers, "PoolManager", pool_manager)
+    monkeypatch.setattr(helpers, "MinioAdmin", client)
+    module = Module(
+        {
+            "auth": {
+                "endpoint": "https://aistor.example.com:9000",
+                "access_key": "admin",
+                "secret_key": "secret",
+                "region": "",
+                "secure": True,
+                "validate_certs": True,
+            }
+        }
+    )
+
+    assert helpers.admin_client(module, preserve_error_response=True) == "client"
+    assert calls["client"]["http_client"] is pool
+    assert calls["pool"]["cert_reqs"] == "CERT_REQUIRED"
+    retry = calls["pool"]["retries"]
+    assert retry.total == 0
+    assert retry.connect == 0
+    assert retry.read == 0
+    assert retry.status == 0
+    assert retry.raise_on_status is False
+    assert retry.status_forcelist == [500, 502, 503, 504]
+
+
+def test_single_attempt_admin_http_client_preserves_first_503_body():
+    helpers = importlib.import_module(MODULE)
+
+    class Handler(BaseHTTPRequestHandler):
+        attempts = 0
+
+        def do_PUT(self):
+            Handler.attempts += 1
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            body = b'{"Code":"PeerError","Message":"peer rejected configuration"}'
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        client = helpers.MinioAdmin(
+            endpoint=f"127.0.0.1:{server.server_port}",
+            credentials=helpers.StaticProvider("admin", "secret"),
+            secure=False,
+            http_client=helpers._single_attempt_admin_http_client(cert_check=False),
+        )
+        peer = helpers.PeerSite("site-two", "https://site-two.example.com", "admin", "secret")
+        with pytest.raises(MinioAdminException) as caught:
+            client.add_site_replication([peer])
+        assert caught.value._code == "503"
+        assert caught.value._body == '{"Code":"PeerError","Message":"peer rejected configuration"}'
+        assert Handler.attempts == 1
+    finally:
+        server.shutdown()
+        thread.join()
 
 
 def test_s3_client_normalizes_endpoint_and_passes_tls_options(monkeypatch):

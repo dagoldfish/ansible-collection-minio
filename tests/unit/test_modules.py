@@ -970,6 +970,33 @@ def test_replication_removal_predicts_topology_in_check_mode():
     assert client.calls == []
 
 
+def test_replication_removal_retries_transient_admin_error():
+    mod = importlib.import_module(f"{BASE}.minio_site_replication")
+
+    class Client(Replication):
+        def remove_site_replication(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                raise MinioAdminException("503", "service unavailable")
+
+    params = {
+        "sites": [{"name": "one"}],
+        "state": "absent",
+        "force": True,
+        "remove_all": False,
+        "retry_delay": 0,
+    }
+    client = Client()
+
+    out = result(mod.run, Module(params), client)
+
+    assert out["changed"] is True
+    assert client.calls == [
+        {"sites": "one", "all_sites": False},
+        {"sites": "one", "all_sites": False},
+    ]
+
+
 @pytest.mark.parametrize(
     ("params", "message"),
     [
@@ -1213,6 +1240,48 @@ def test_replication_edit_serializes_server_native_bandwidth_and_sync_types():
     }
     assert isinstance(client.payload["defaultbandwidth"]["bandwidthLimitPerBucket"], int)
     assert isinstance(client.payload["defaultbandwidth"]["set"], bool)
+
+
+def test_replication_edit_retries_transient_admin_error():
+    mod = importlib.import_module(f"{BASE}.minio_site_replication")
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def get_site_replication_info(self):
+            return {
+                "enabled": True,
+                "sites": [
+                    {
+                        "name": "two",
+                        "endpoint": "https://two",
+                        "deploymentID": "dep2",
+                        "sync": "disable",
+                        "defaultbandwidth": {"bandwidthLimitPerBucket": 0},
+                    }
+                ],
+            }
+
+        def edit_site_replication(self, peer):
+            self.calls.append(peer.to_dict())
+            if len(self.calls) == 1:
+                raise MinioAdminException("503", "service unavailable")
+
+    params = {
+        "sites": [{"name": "two", "sync": True}],
+        "state": "present",
+        "force": False,
+        "remove_all": False,
+        "retry_delay": 0,
+    }
+    client = Client()
+
+    out = result(mod.run, Module(params), client)
+
+    assert out["changed"] is True
+    assert len(client.calls) == 2
+    assert client.calls[0] == client.calls[1]
 
 
 def test_replication_add_check_mode_predicts_without_mutating():
