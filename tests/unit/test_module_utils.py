@@ -7,11 +7,13 @@
 from __future__ import annotations
 
 import importlib
+import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import pytest
-from minio.error import MinioAdminException, S3Error
+from minio.error import InvalidResponseError, MinioAdminException, S3Error, ServerError
 
 MODULE = "ansible_collections.dagoldfish.minio.plugins.module_utils.minio_admin"
 
@@ -414,6 +416,166 @@ def test_fail_from_exception_redacts_ldap_bind_password():
     with pytest.raises(FailJson) as caught:
         helpers.fail_from_exception(module, RuntimeError("LDAP rejected directory-secret"))
     assert caught.value.args[0]["msg"] == "MinIO AIStor API request failed: LDAP rejected ***"
+
+
+def test_fail_from_exception_structures_admin_error_and_redacts_site_credentials():
+    helpers = importlib.import_module(MODULE)
+    module = Module(
+        {
+            "auth": {},
+            "sites": [{"access_key": "peer-admin", "secret_key": "peer-secret"}],
+        }
+    )
+    error = MinioAdminException(
+        "503",
+        '{"Code":"PeerError","Message":"peer-admin rejected peer-secret"}',
+    )
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(module, error)
+
+    result = caught.value.args[0]
+    assert "peer-admin" not in result["msg"]
+    assert "peer-secret" not in result["msg"]
+    assert result["api_error"] == {
+        "type": "MinioAdminException",
+        "status": 503,
+        "code": "PeerError",
+        "message": "*** rejected ***",
+    }
+
+
+def test_fail_from_exception_structures_s3_error():
+    helpers = importlib.import_module(MODULE)
+    error = S3Error(
+        response=SimpleNamespace(status=503),
+        code="SlowDown",
+        message="reduce request rate",
+        resource="/backups",
+        request_id="request-three",
+        host_id=None,
+        bucket_name="backups",
+    )
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(Module({"auth": {}}), error)
+
+    assert caught.value.args[0]["api_error"] == {
+        "type": "S3Error",
+        "status": 503,
+        "code": "SlowDown",
+        "message": "reduce request rate",
+        "resource": "/backups",
+        "request_id": "request-three",
+    }
+
+
+def test_fail_from_exception_redacts_json_escaped_credentials():
+    helpers = importlib.import_module(MODULE)
+    secret = 'peer"secret\\line\nnext'
+    body = json.dumps({"Code": "PeerError", "Message": secret})
+    module = Module({"auth": {}, "sites": [{"secret_key": secret}]})
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(module, MinioAdminException("503", body))
+
+    result = caught.value.args[0]
+    assert secret not in result["msg"]
+    assert json.dumps(secret)[1:-1] not in result["msg"]
+    assert result["api_error"]["message"] == "***"
+
+
+def test_fail_from_exception_does_not_return_credentials_used_as_json_keys():
+    helpers = importlib.import_module(MODULE)
+    secret = "peer-secret"
+    body = json.dumps({secret: "rejected"})
+    module = Module({"auth": {}, "sites": [{"secret_key": secret}]})
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(module, MinioAdminException("503", body))
+
+    serialized = json.dumps(caught.value.args[0])
+    assert secret not in serialized
+    assert caught.value.args[0]["api_error"]["body_omitted"] is True
+
+
+def test_fail_from_exception_omits_oversized_admin_body():
+    helpers = importlib.import_module(MODULE)
+    body = "x" * (helpers._MAX_ERROR_BODY_LENGTH + 1)
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(Module({"auth": {}}), MinioAdminException("502", body))
+
+    details = caught.value.args[0]["api_error"]
+    assert details == {
+        "type": "MinioAdminException",
+        "status": 502,
+        "body_omitted": True,
+        "body_length": len(body),
+    }
+    assert body not in caught.value.args[0]["msg"]
+
+
+def test_fail_from_exception_omits_deeply_nested_admin_body():
+    helpers = importlib.import_module(MODULE)
+    body = "[" * 1000 + "0" + "]" * 1000
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(Module({"auth": {}}), MinioAdminException("500", body))
+
+    assert caught.value.args[0]["api_error"] == {
+        "type": "MinioAdminException",
+        "status": 500,
+        "body_omitted": True,
+        "body_length": len(body),
+    }
+
+
+def test_fail_from_exception_structures_invalid_response_without_body():
+    helpers = importlib.import_module(MODULE)
+    error = InvalidResponseError(502, "text/html", "<html>upstream failure</html>")
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(Module({"auth": {}}), error)
+
+    assert caught.value.args[0]["api_error"] == {
+        "type": "InvalidResponseError",
+        "status": 502,
+        "content_type": "text/html",
+        "body_omitted": True,
+        "body_length": 29,
+    }
+    assert "<html>" not in caught.value.args[0]["msg"]
+
+
+def test_fail_from_exception_structures_server_error():
+    helpers = importlib.import_module(MODULE)
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(Module({"auth": {}}), ServerError("upstream failure", 504))
+
+    assert caught.value.args[0]["api_error"] == {"type": "ServerError", "status": 504}
+
+
+def test_fail_from_exception_bounds_s3_diagnostics_after_redaction():
+    helpers = importlib.import_module(MODULE)
+    secret = "peer-secret"
+    message = "x" * helpers._MAX_ERROR_FIELD_LENGTH + secret
+    error = S3Error(
+        response=SimpleNamespace(status=503),
+        code="SlowDown",
+        message=message,
+        resource="/backups",
+        request_id="request-three",
+        host_id=None,
+    )
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(Module({"auth": {"secret_key": secret}}), error)
+
+    result = caught.value.args[0]
+    assert secret not in json.dumps(result)
+    assert result["api_error"]["message"].endswith("... [3 characters omitted]")
 
 
 def test_not_found_only_matches_admin_404():

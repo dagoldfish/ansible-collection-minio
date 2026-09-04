@@ -21,13 +21,16 @@ from ansible.module_utils.basic import missing_required_lib
 
 __all__ = ("PeerInfo", "PeerSite", "SiteReplicationStatusOptions")
 
+_MAX_ERROR_BODY_LENGTH = 16384
+_MAX_ERROR_FIELD_LENGTH = 4096
+
 MINIO_IMP_ERR = None
 try:
     import certifi
     from minio import Minio, MinioAdmin
     from minio.credentials import StaticProvider
     from minio.crypto import decrypt, encrypt
-    from minio.error import MinioAdminException
+    from minio.error import InvalidResponseError, MinioAdminException, S3Error, ServerError
     from minio.minioadmin import PeerInfo, PeerSite, SiteReplicationStatusOptions
     from urllib3 import PoolManager, Retry
     from urllib3.exceptions import HTTPError
@@ -40,6 +43,9 @@ except ImportError:
     decrypt = None  # type: ignore[assignment,misc]
     encrypt = None  # type: ignore[assignment,misc]
     MinioAdminException = Exception  # type: ignore[assignment,misc]
+    InvalidResponseError = Exception  # type: ignore[assignment,misc]
+    S3Error = Exception  # type: ignore[assignment,misc]
+    ServerError = Exception  # type: ignore[assignment,misc]
     HTTPError = OSError  # type: ignore[assignment,misc]
     PeerSite = None  # type: ignore[assignment,misc]
     PeerInfo = None  # type: ignore[assignment,misc]
@@ -261,17 +267,143 @@ def ldap_idp_delete(client: Any, name: str) -> None:
     _idp_request(client, "DELETE", name)
 
 
+def _sensitive_values(params: dict[str, Any]) -> list[Any]:
+    """Collect credentials that an API error could echo in its response."""
+    auth = params.get("auth", {}) if isinstance(params.get("auth", {}), dict) else {}
+    values = [auth.get("access_key"), auth.get("secret_key")]
+    values.extend(params.get(field) for field in ("secret_key", "lookup_bind_password"))
+    for site in params.get("sites", []) or []:
+        if isinstance(site, dict):
+            values.extend(site.get(field) for field in ("access_key", "secret_key"))
+    return [value for value in values if value]
+
+
+def _redact(value: Any, sensitive_values: list[Any]) -> Any:
+    """Redact known credentials from strings and structured diagnostics."""
+    if isinstance(value, dict):
+        return {_redact(key, sensitive_values): _redact(item, sensitive_values) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact(item, sensitive_values) for item in value]
+    if not isinstance(value, str):
+        return value
+    result = value
+    for sensitive in sensitive_values:
+        result = result.replace(str(sensitive), "***")
+    return result
+
+
+def _status_code(value: Any) -> Any:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _scalar_text(value: Any) -> Optional[str]:
+    """Return text only for scalar diagnostic values."""
+    if value is None or isinstance(value, (dict, list)):
+        return None
+    return str(value)
+
+
+def _diagnostic_text(value: Any) -> Optional[str]:
+    """Bound a scalar diagnostic value for safe module output."""
+    value = _scalar_text(value)
+    if value is None:
+        return None
+    if len(value) <= _MAX_ERROR_FIELD_LENGTH:
+        return value
+    omitted = len(value) - _MAX_ERROR_FIELD_LENGTH
+    return f"{value[:_MAX_ERROR_FIELD_LENGTH]}... [{omitted} characters omitted]"
+
+
+def _api_error_details(error: Exception) -> Optional[dict[str, Any]]:
+    """Extract stable diagnostics from minio-py exception types."""
+    details: dict[str, Any] = {"type": type(error).__name__}
+    if isinstance(error, MinioAdminException):
+        body = str(getattr(error, "_body", ""))
+        details["status"] = _status_code(getattr(error, "_code", None))
+        if len(body) > _MAX_ERROR_BODY_LENGTH:
+            details.update({"body_omitted": True, "body_length": len(body)})
+        else:
+            try:
+                parsed = json.loads(body)
+            except (TypeError, ValueError, RecursionError):
+                details.update({"body_omitted": True, "body_length": len(body)})
+            else:
+                if isinstance(parsed, dict):
+                    details["code"] = _scalar_text(parsed.get("Code") or parsed.get("code"))
+                    details["message"] = _scalar_text(parsed.get("Message") or parsed.get("message"))
+                if not details.get("code") and not details.get("message"):
+                    details.update({"body_omitted": True, "body_length": len(body)})
+    elif isinstance(error, S3Error):
+        details.update(
+            {
+                "status": _status_code(getattr(getattr(error, "response", None), "status", None)),
+                "code": _scalar_text(getattr(error, "code", None)),
+                "message": _scalar_text(getattr(error, "message", None)),
+                "resource": _scalar_text(getattr(error, "resource", None)),
+                "request_id": _scalar_text(getattr(error, "request_id", None)),
+            }
+        )
+    elif isinstance(error, InvalidResponseError):
+        body = getattr(error, "_body", None)
+        details.update(
+            {
+                "status": _status_code(getattr(error, "_code", None)),
+                "content_type": getattr(error, "_content_type", None),
+            }
+        )
+        if body is not None:
+            details.update({"body_omitted": True, "body_length": len(body) if isinstance(body, str) else None})
+    elif isinstance(error, ServerError):
+        details["status"] = _status_code(getattr(error, "status_code", None))
+    else:
+        return None
+    return {key: value for key, value in details.items() if value is not None}
+
+
+def _redact_api_error(details: dict[str, Any], sensitive_values: list[Any]) -> dict[str, Any]:
+    """Redact server-controlled diagnostic fields without changing metadata."""
+    redacted = {}
+    for key, value in details.items():
+        if key in ("type", "status") or not isinstance(value, str):
+            redacted[key] = value
+        else:
+            redacted[key] = _diagnostic_text(_redact(value, sensitive_values))
+    return redacted
+
+
+def _api_error_message(details: dict[str, Any]) -> str:
+    """Format concise human-readable text from structured API diagnostics."""
+    labels = (
+        ("status", "status"),
+        ("code", "code"),
+        ("message", "message"),
+        ("resource", "resource"),
+        ("request_id", "request ID"),
+        ("content_type", "content type"),
+    )
+    values = [f"{label}: {details[key]}" for key, label in labels if details.get(key) not in (None, "")]
+    if details.get("body_omitted"):
+        values.append(f"response body omitted ({details.get('body_length', 'unknown')} characters)")
+    return f"{details['type']}: " + ", ".join(values)
+
+
 def fail_from_exception(module: Any, error: Exception) -> None:
     """Return an API failure without exposing request credentials."""
-    message = str(error)
     params = module.params if isinstance(module.params, dict) else {}
-    auth = params.get("auth", {})
-    sensitive_values = [auth.get("access_key"), auth.get("secret_key")]
-    sensitive_values.extend(params.get(field) for field in ("secret_key", "lookup_bind_password"))
-    for value in sensitive_values:
-        if value:
-            message = message.replace(str(value), "***")
-    module.fail_json(msg=f"MinIO AIStor API request failed: {message}")
+    sensitive_values = _sensitive_values(params)
+    details = _api_error_details(error)
+    if details:
+        details = _redact_api_error(details, sensitive_values)
+        message = _api_error_message(details)
+    else:
+        message = _diagnostic_text(_redact(str(error), sensitive_values)) or type(error).__name__
+    result = {"msg": f"MinIO AIStor API request failed: {message}"}
+    if details:
+        result["api_error"] = details
+    module.fail_json(**result)
 
 
 def is_not_found(error: Exception) -> bool:
