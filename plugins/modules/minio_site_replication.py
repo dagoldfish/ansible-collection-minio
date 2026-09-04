@@ -51,7 +51,7 @@ options:
     type: int
     default: 5
   retry_timeout:
-    description: Maximum retry window in seconds for topology reads and site additions.
+    description: Maximum retry window in seconds for retryable site-replication operations.
     type: int
     default: 600
 author: [Geoffrey Burger (@dagoldfish)]
@@ -192,7 +192,14 @@ def run(module, client):
             module.fail_json(msg="sites must contain at least one name when remove_all=false")
         changed = bool(existing) if remove_all else bool(set(names) & set(existing))
         if changed and not module.check_mode:
-            client.remove_site_replication(sites=",".join(names) if names else None, all_sites=remove_all)
+            _retry_call(
+                lambda: client.remove_site_replication(
+                    sites=",".join(names) if names else None,
+                    all_sites=remove_all,
+                ),
+                deadline,
+                retry_delay,
+            )
         predicted_sites = [] if remove_all else [site for name, site in existing.items() if name not in names]
         predicted = dict(info)
         predicted["sites"] = predicted_sites
@@ -241,15 +248,18 @@ def run(module, client):
     if edits and not module.check_mode:
         for site, current, endpoint, sync, bandwidth in edits:
             sync_enabled = None if sync not in ("enable", "disable") else sync == "enable"
-            client.edit_site_replication(
-                PeerInfo(
-                    current["deploymentID"],
-                    endpoint,
-                    bandwidth,
-                    bool(bandwidth),
-                    name=site["name"],
-                    sync_status=sync_enabled,
-                )
+            peer = PeerInfo(
+                current["deploymentID"],
+                endpoint,
+                bandwidth,
+                bool(bandwidth),
+                name=site["name"],
+                sync_status=sync_enabled,
+            )
+            _retry_call(
+                lambda: client.edit_site_replication(peer),
+                deadline,
+                retry_delay,
             )
     predicted = dict(info)
     predicted["sites"] = list(existing.values()) + [

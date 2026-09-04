@@ -1,9 +1,10 @@
 # Changelog
 
-## 0.2.3-dev.2 - 2026-09-04
+## 0.2.3-dev.3 - 2026-09-04
 
-- Retry transient site-replication topology reads and additions, verifying the
-  topology before resubmitting an add whose response may have been lost.
+- Retry transient site-replication topology reads, additions, edits, and
+  removals, verifying the topology before resubmitting an add whose response
+  may have been lost.
 - Send native JSON number and boolean values when editing replication bandwidth
   and synchronization settings, as required by current AIStor servers.
 - Preserve site-replication HTTP 5xx response bodies instead of allowing the
