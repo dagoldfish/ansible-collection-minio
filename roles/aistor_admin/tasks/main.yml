@@ -130,6 +130,8 @@
     remove_all: "{{ aistor_admin_site_replication.remove_all | default(false) }}"
     force: "{{ aistor_admin_site_replication.force | default(false) }}"
     state: "{{ aistor_admin_site_replication.state | default('present') }}"
+    retry_delay: "{{ aistor_admin_site_replication.retry_delay | default(aistor_admin_site_replication_retry_delay) }}"
+    retry_timeout: "{{ aistor_admin_site_replication.retry_timeout | default(aistor_admin_site_replication_retry_timeout) }}"
   when:
     - aistor_admin_manage | bool
     - aistor_admin_site_replication | length > 0

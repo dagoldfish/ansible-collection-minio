@@ -10,6 +10,7 @@ import importlib
 
 import pytest
 from minio.error import MinioAdminException
+from urllib3.exceptions import MaxRetryError, ResponseError
 
 BASE = "ansible_collections.dagoldfish.minio.plugins.modules"
 
@@ -1012,6 +1013,104 @@ def test_replication_existing_topology_is_idempotent():
     assert result(mod.run, Module(params), Replication())["changed"] is False
 
 
+def test_replication_retries_sdk_max_retry_error_for_topology_read():
+    mod = importlib.import_module(f"{BASE}.minio_site_replication")
+    outcomes = iter(
+        [
+            MaxRetryError(None, "/minio/admin/v3/site-replication/info", ResponseError("too many 503 responses")),
+            {"enabled": True, "sites": []},
+        ]
+    )
+    calls = []
+
+    def read():
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    info = mod._retry_call(read, deadline=10, delay=2, sleep=calls.append, monotonic=lambda: 0)
+
+    assert info == {"enabled": True, "sites": []}
+    assert calls == [2]
+
+
+def test_replication_does_not_retry_admin_version_mismatch():
+    mod = importlib.import_module(f"{BASE}.minio_site_replication")
+    calls = []
+
+    def read():
+        calls.append("read")
+        raise MinioAdminException("426", "XMinioAdminVersionMismatch")
+
+    with pytest.raises(MinioAdminException):
+        mod._retry_call(read, deadline=10, delay=0, monotonic=lambda: 0)
+    assert calls == ["read"]
+
+
+def test_replication_ambiguous_add_checks_topology_before_resubmitting():
+    mod = importlib.import_module(f"{BASE}.minio_site_replication")
+
+    class Client:
+        def __init__(self):
+            self.adds = 0
+
+        def add_site_replication(self, peers):
+            self.adds += 1
+            raise OSError("response connection closed")
+
+        def get_site_replication_info(self):
+            return {"enabled": True, "sites": [{"name": "two"}]}
+
+    client = Client()
+    info = mod._add_and_read_topology(
+        client,
+        ["peer"],
+        {"two"},
+        deadline=10,
+        delay=1,
+        sleep=lambda _: None,
+        monotonic=lambda: 0,
+    )
+
+    assert info["sites"] == [{"name": "two"}]
+    assert client.adds == 1
+
+
+def test_replication_retries_add_only_after_topology_confirms_it_is_missing():
+    mod = importlib.import_module(f"{BASE}.minio_site_replication")
+
+    class Client:
+        def __init__(self):
+            self.adds = 0
+
+        def add_site_replication(self, peers):
+            self.adds += 1
+            if self.adds == 1:
+                raise MinioAdminException("503", "service unavailable")
+
+        def get_site_replication_info(self):
+            if self.adds == 1:
+                return {"enabled": False, "sites": []}
+            return {"enabled": True, "sites": [{"name": "two"}]}
+
+    client = Client()
+    sleeps = []
+    info = mod._add_and_read_topology(
+        client,
+        ["peer"],
+        {"two"},
+        deadline=10,
+        delay=1,
+        sleep=sleeps.append,
+        monotonic=lambda: 0,
+    )
+
+    assert info["sites"] == [{"name": "two"}]
+    assert client.adds == 2
+    assert sleeps == [1]
+
+
 def test_replication_add_applies_requested_settings(monkeypatch):
     mod = importlib.import_module(f"{BASE}.minio_site_replication")
     monkeypatch.setattr(mod, "PeerSite", lambda *args: args)
@@ -1062,6 +1161,58 @@ def test_replication_add_applies_requested_settings(monkeypatch):
     client = Client()
     assert result(mod.run, Module(params), client)["changed"] is True
     assert [call[0] for call in client.calls] == ["add", "edit"]
+    assert client.calls[1][1] == (("dep2", "https://two", 1024, True), {"name": "two", "sync_status": True})
+
+
+def test_replication_edit_serializes_server_native_bandwidth_and_sync_types():
+    mod = importlib.import_module(f"{BASE}.minio_site_replication")
+
+    class Client:
+        def __init__(self):
+            self.payload = None
+
+        def get_site_replication_info(self):
+            return {
+                "enabled": True,
+                "sites": [
+                    {
+                        "name": "two",
+                        "endpoint": "https://two",
+                        "deploymentID": "dep2",
+                        "sync": "disable",
+                        "defaultbandwidth": {"bandwidthLimitPerBucket": 0},
+                    }
+                ],
+            }
+
+        def edit_site_replication(self, peer):
+            self.payload = peer.to_dict()
+
+    params = {
+        "sites": [
+            {
+                "name": "two",
+                "endpoint": "http://two.internal",
+                "sync": False,
+                "bandwidth_limit": 0,
+            }
+        ],
+        "state": "present",
+        "force": False,
+        "remove_all": False,
+    }
+    client = Client()
+
+    assert result(mod.run, Module(params), client)["changed"] is True
+    assert client.payload == {
+        "endpoint": "http://two.internal",
+        "deploymentID": "dep2",
+        "defaultbandwidth": {"bandwidthLimitPerBucket": 0, "set": False},
+        "name": "two",
+        "sync": "disable",
+    }
+    assert isinstance(client.payload["defaultbandwidth"]["bandwidthLimitPerBucket"], int)
+    assert isinstance(client.payload["defaultbandwidth"]["set"], bool)
 
 
 def test_replication_add_check_mode_predicts_without_mutating():

@@ -12,3 +12,5 @@ aistor_admin_restart_readiness_delay: 5
 aistor_admin_restart_readiness_timeout: 180
 aistor_admin_policy_bindings: []
 aistor_admin_site_replication: {}
+aistor_admin_site_replication_retry_delay: 5
+aistor_admin_site_replication_retry_timeout: 600

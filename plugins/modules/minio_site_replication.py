@@ -46,6 +46,14 @@ options:
   remove_all: {type: bool, default: false, description: Remove the complete topology.}
   force: {type: bool, default: false, description: Required destructive-operation acknowledgement.}
   state: {description: Add or explicitly remove sites., type: str, choices: [present, absent], default: present}
+  retry_delay:
+    description: Seconds between retries after a transient Admin API or transport failure.
+    type: int
+    default: 5
+  retry_timeout:
+    description: Maximum retry window in seconds for topology reads and site additions.
+    type: int
+    default: 600
 author: [Geoffrey Burger (@dagoldfish)]
 requirements: [minio >= 7.2.20]
 attributes:
@@ -67,19 +75,102 @@ EXAMPLES = r"""
 RETURN = r"""
 site_replication: {description: Current or predicted topology., returned: always, type: dict}
 """
+import time
+
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.dagoldfish.minio.plugins.module_utils.minio_admin import (
+    MinioAdminException,
     PeerInfo,
     PeerSite,
     admin_client,
     auth_argument_spec,
     fail_from_exception,
+    is_transport_error,
     parse_json,
 )
 
 
+def _status_code(error):
+    """Extract the HTTP status code exposed by minio-py's Admin exception."""
+    try:
+        return int(getattr(error, "_code", None))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_retryable(error):
+    """Limit retries to transport failures, rate limiting, and server errors."""
+    if isinstance(error, MinioAdminException):
+        status = _status_code(error)
+        return status == 429 or (status is not None and 500 <= status <= 599)
+    return is_transport_error(error)
+
+
+def _retry_call(call, deadline, delay, sleep=time.sleep, monotonic=time.monotonic):
+    """Retry one idempotent Admin API call within a shared deadline."""
+    while True:
+        try:
+            return call()
+        except Exception as error:
+            now = monotonic()
+            if not _is_retryable(error) or now >= deadline:
+                raise
+            sleep(min(delay, max(0, deadline - now)))
+
+
+def _add_and_read_topology(
+    client,
+    peers,
+    desired_names,
+    deadline,
+    delay,
+    sleep=time.sleep,
+    monotonic=time.monotonic,
+):
+    """Add peers, checking topology before retrying an ambiguous failed request."""
+    while True:
+        try:
+            client.add_site_replication(peers)
+        except Exception as error:
+            now = monotonic()
+            if not _is_retryable(error) or now >= deadline:
+                raise
+            info = _retry_call(
+                client.get_site_replication_info,
+                deadline,
+                delay,
+                sleep=sleep,
+                monotonic=monotonic,
+            )
+            current_names = {site.get("name") for site in (parse_json(info, {}) or {}).get("sites", [])}
+            if desired_names <= current_names:
+                return info
+            now = monotonic()
+            if now >= deadline:
+                raise error
+            sleep(min(delay, max(0, deadline - now)))
+            continue
+        return _retry_call(
+            client.get_site_replication_info,
+            deadline,
+            delay,
+            sleep=sleep,
+            monotonic=monotonic,
+        )
+
+
 def run(module, client):
-    info = parse_json(client.get_site_replication_info(), {}) or {}
+    retry_delay = module.params.get("retry_delay", 5)
+    retry_timeout = module.params.get("retry_timeout", 600)
+    if retry_delay < 0:
+        module.fail_json(msg="retry_delay must be greater than or equal to zero")
+    if retry_timeout < 1:
+        module.fail_json(msg="retry_timeout must be greater than zero")
+    deadline = time.monotonic() + retry_timeout
+    info = parse_json(
+        _retry_call(client.get_site_replication_info, deadline, retry_delay),
+        {},
+    ) or {}
     existing = {s.get("name"): s for s in info.get("sites", [])}
     sites = module.params["sites"]
     state = module.params["state"]
@@ -115,8 +206,16 @@ def run(module, client):
                 module.fail_json(msg=f"{field} is required when adding site {site['name']}")
     if missing and not module.check_mode:
         peers = [PeerSite(s["name"], s["endpoint"], s["access_key"], s["secret_key"]) for s in missing]
-        client.add_site_replication(peers)
-        info = parse_json(client.get_site_replication_info(), {}) or {}
+        info = parse_json(
+            _add_and_read_topology(
+                client,
+                peers,
+                {site["name"] for site in missing},
+                deadline,
+                retry_delay,
+            ),
+            {},
+        ) or {}
         existing = {s.get("name"): s for s in info.get("sites", [])}
     edits = []
     for site in sites:
@@ -141,14 +240,15 @@ def run(module, client):
             edits.append((site, current, desired_endpoint, desired_sync, desired_bandwidth))
     if edits and not module.check_mode:
         for site, current, endpoint, sync, bandwidth in edits:
+            sync_enabled = None if sync not in ("enable", "disable") else sync == "enable"
             client.edit_site_replication(
                 PeerInfo(
                     current["deploymentID"],
                     endpoint,
-                    str(bandwidth),
-                    str(bool(bandwidth)).lower(),
+                    bandwidth,
+                    bool(bandwidth),
                     name=site["name"],
-                    sync_status=sync,
+                    sync_status=sync_enabled,
                 )
             )
     predicted = dict(info)
@@ -178,6 +278,8 @@ def main():
             "remove_all": {"type": "bool", "default": False},
             "force": {"type": "bool", "default": False},
             "state": {"type": "str", "choices": ["present", "absent"], "default": "present"},
+            "retry_delay": {"type": "int", "default": 5},
+            "retry_timeout": {"type": "int", "default": 600},
         },
         supports_check_mode=True,
     )

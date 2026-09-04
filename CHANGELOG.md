@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Retry transient site-replication topology reads and additions, verifying the
+  topology before resubmitting an add whose response may have been lost.
+- Send native JSON number and boolean values when editing replication bandwidth
+  and synchronization settings, as required by current AIStor servers.
+
 All notable changes to `dagoldfish.minio` are documented in this file.
 
 ## 0.2.2 - 2026-09-03

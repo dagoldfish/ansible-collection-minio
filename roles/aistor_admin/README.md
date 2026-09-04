@@ -131,9 +131,15 @@ reports that the requested binding state is already satisfied.
 
 ### Site replication
 
-`aistor_admin_site_replication` accepts `sites`, `state`, `force`, and
-`remove_all`. A site accepts `name`, `endpoint`, `access_key`, `secret_key`,
-`sync`, and a non-negative `bandwidth_limit`.
+`aistor_admin_site_replication` accepts `sites`, `state`, `force`, `remove_all`,
+`retry_delay`, and `retry_timeout`. A site accepts `name`, `endpoint`,
+`access_key`, `secret_key`, `sync`, and a non-negative `bandwidth_limit`.
+Transient transport, HTTP 429, and HTTP 5xx failures during topology reads and
+site additions are retried for up to 600 seconds by default. After an ambiguous
+failed add response, the module reads the topology before submitting the add
+again, so a successful request with a lost response remains idempotent. Set
+`aistor_admin_site_replication_retry_delay` and
+`aistor_admin_site_replication_retry_timeout` to change the role-wide defaults.
 
 Adding a site requires its endpoint and credentials. Removing named sites
 requires `state: absent`, `force: true`, and at least one site name. Removing
