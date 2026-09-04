@@ -11,6 +11,8 @@
   SDK transport to replace them with an opaque retry-exhaustion exception.
 - Preserve the final Admin API HTTP 5xx response after normal SDK retries so
   all administration modules report the server's diagnostic body.
+- Preserve the final S3 HTTP 5xx response after normal SDK retries so bucket
+  failures retain the server's error code, message, and request identifier.
 
 All notable changes to `dagoldfish.minio` are documented in this file.
 
