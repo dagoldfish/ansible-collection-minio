@@ -108,7 +108,8 @@ so shared module defaults can be defined once when appropriate.
   `update_secret: true` to rotate one intentionally.
 - LDAP bind passwords are also unreadable. Set `update_bind_password: true` to
   rotate one intentionally. LDAP configuration changes require an AIStor
-  restart; the role reports this by default and can restart automatically.
+  restart; the role reports this by default and can restart automatically,
+  waiting for the authenticated Admin API to become ready before continuing.
 - AIStor environment variables override SDK-managed LDAP configuration.
 - Groups add declared members by default. Set `purge_members: true` to remove
   undeclared members.

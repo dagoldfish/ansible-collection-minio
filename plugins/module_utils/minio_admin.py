@@ -26,6 +26,7 @@ try:
     from minio.crypto import decrypt, encrypt
     from minio.error import MinioAdminException
     from minio.minioadmin import PeerInfo, PeerSite, SiteReplicationStatusOptions
+    from urllib3.exceptions import HTTPError
 except ImportError:
     MINIO_IMP_ERR = traceback.format_exc()
     Minio = None  # type: ignore[assignment,misc]
@@ -34,6 +35,7 @@ except ImportError:
     decrypt = None  # type: ignore[assignment,misc]
     encrypt = None  # type: ignore[assignment,misc]
     MinioAdminException = Exception  # type: ignore[assignment,misc]
+    HTTPError = OSError  # type: ignore[assignment,misc]
     PeerSite = None  # type: ignore[assignment,misc]
     PeerInfo = None  # type: ignore[assignment,misc]
     SiteReplicationStatusOptions = None  # type: ignore[assignment,misc]
@@ -99,6 +101,11 @@ def parse_json(value: Any, default: Any = None) -> Any:
     if isinstance(value, (dict, list)):
         return value
     return json.loads(value)
+
+
+def is_transport_error(error: Exception) -> bool:
+    """Return whether an exception represents a temporary transport failure."""
+    return isinstance(error, (HTTPError, OSError, TimeoutError))
 
 
 def canonical_json(value: Any) -> str:

@@ -10,6 +10,7 @@ import importlib
 
 import pytest
 from minio.error import MinioAdminException
+from urllib3.exceptions import MaxRetryError, ResponseError
 
 BASE = "ansible_collections.dagoldfish.minio.plugins.modules"
 
@@ -618,6 +619,59 @@ def test_ldap_provider_creates_missing_default_through_dedicated_api():
     assert "lookup_bind_password" not in out["provider"]
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"Code":"XMinioAdminNoSuchConfigTarget","Message":"unexpected wording"}',
+        '{"Code":"UnexpectedCode","Message":"No such named configuration target exists"}',
+        (
+            '{"Code":"XMinioAdminNoSuchConfigTarget",'
+            '"Message":"No such named configuration target exists"}'
+        ),
+    ],
+)
+def test_ldap_provider_recognizes_missing_named_configuration_target(body):
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+    assert mod._is_missing(MinioAdminException("400", body)) is True
+
+
+def test_ldap_provider_creates_after_missing_target_bad_request():
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+
+    class MissingTargetProviders(LdapProviders):
+        def get_idp_config(self, config_type, name):
+            self.calls.append(("get", config_type, name))
+            raise MinioAdminException(
+                "400",
+                (
+                    '{"Code":"XMinioAdminNoSuchConfigTarget",'
+                    '"Message":"No such named configuration target exists"}'
+                ),
+            )
+
+    params = ldap_params(
+        server_addr="ldap.example.com:636",
+        lookup_bind_dn="cn=minio,dc=example",
+        lookup_bind_password="bind-password",
+        user_dn_search_base_dn="ou=users,dc=example",
+        user_dn_search_filter="(uid=%s)",
+    )
+    client = MissingTargetProviders()
+
+    out = result(mod.run, Module(params), client)
+
+    assert out["changed"] is True
+    assert out["restart_required"] is True
+    assert [call[0] for call in client.calls] == ["get", "set"]
+    assert "lookup_bind_password" not in out["provider"]
+
+
+def test_ldap_provider_does_not_hide_other_bad_requests():
+    mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
+    error = MinioAdminException("400", '{"Code":"InvalidRequest","Message":"invalid LDAP filter"}')
+    assert mod._is_missing(error) is False
+
+
 def test_ldap_provider_updates_existing_provider_through_dedicated_api():
     mod = importlib.import_module(f"{BASE}.minio_ldap_provider")
     client = LdapProviders(LDAP_CONFIG)
@@ -674,20 +728,73 @@ def test_ldap_provider_requires_create_fields_and_rotation_password():
 
 
 class Services:
-    def __init__(self):
+    def __init__(self, readiness=None):
         self.calls = []
+        self.readiness = iter(readiness or ["ready"])
 
     def service_restart(self):
         self.calls.append("restart")
         return "restarting"
 
+    def info(self):
+        self.calls.append("info")
+        outcome = next(self.readiness)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
 
 def test_service_restart_and_check_mode():
     mod = importlib.import_module(f"{BASE}.minio_service")
     client = Services()
-    assert result(mod.run, Module({"action": "restart"}), client)["response"] == "restarting"
-    assert result(mod.run, Module({"action": "restart"}, True), client)["response"] == ""
+    params = {"action": "restart", "wait_for_ready": False, "readiness_delay": 5, "readiness_timeout": 180}
+    assert result(mod.run, Module(params), client)["response"] == "restarting"
+    assert result(mod.run, Module(params, True), client)["response"] == ""
     assert client.calls == ["restart"]
+
+
+def test_service_readiness_retries_temporary_403_5xx_and_connection_failures():
+    mod = importlib.import_module(f"{BASE}.minio_service")
+    client = Services(
+        [
+            MinioAdminException("403", "nginx is restarting"),
+            OSError("connection refused"),
+            MinioAdminException("503", "service unavailable"),
+            "ready",
+        ]
+    )
+    sleeps = []
+    ticks = iter([0, 1, 2, 3, 4, 5, 6])
+
+    mod._wait_until_ready(client, delay=2, timeout=30, sleep=sleeps.append, monotonic=lambda: next(ticks))
+
+    assert client.calls == ["info", "info", "info", "info"]
+    assert sleeps == [2, 2, 2]
+
+
+def test_service_readiness_does_not_retry_permanent_admin_errors():
+    mod = importlib.import_module(f"{BASE}.minio_service")
+    client = Services([MinioAdminException("401", "invalid credentials")])
+
+    with pytest.raises(MinioAdminException):
+        mod._wait_until_ready(client, delay=0, timeout=30)
+    assert client.calls == ["info"]
+
+
+def test_service_restart_waits_for_readiness_but_check_mode_does_not(monkeypatch):
+    mod = importlib.import_module(f"{BASE}.minio_service")
+    params = {"action": "restart", "wait_for_ready": True, "readiness_delay": 0, "readiness_timeout": 30}
+    client = Services()
+    monkeypatch.setattr(mod, "_wait_until_ready", lambda actual, delay, timeout: actual.info())
+
+    out = result(mod.run, Module(params), client)
+    assert out["ready"] is True
+    assert client.calls == ["restart", "info"]
+
+    check_client = Services()
+    out = result(mod.run, Module(params, True), check_client)
+    assert out["ready"] is False
+    assert check_client.calls == []
 
 
 class ServiceAccounts:
@@ -906,6 +1013,104 @@ def test_replication_existing_topology_is_idempotent():
     assert result(mod.run, Module(params), Replication())["changed"] is False
 
 
+def test_replication_retries_sdk_max_retry_error_for_topology_read():
+    mod = importlib.import_module(f"{BASE}.minio_site_replication")
+    outcomes = iter(
+        [
+            MaxRetryError(None, "/minio/admin/v3/site-replication/info", ResponseError("too many 503 responses")),
+            {"enabled": True, "sites": []},
+        ]
+    )
+    calls = []
+
+    def read():
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    info = mod._retry_call(read, deadline=10, delay=2, sleep=calls.append, monotonic=lambda: 0)
+
+    assert info == {"enabled": True, "sites": []}
+    assert calls == [2]
+
+
+def test_replication_does_not_retry_admin_version_mismatch():
+    mod = importlib.import_module(f"{BASE}.minio_site_replication")
+    calls = []
+
+    def read():
+        calls.append("read")
+        raise MinioAdminException("426", "XMinioAdminVersionMismatch")
+
+    with pytest.raises(MinioAdminException):
+        mod._retry_call(read, deadline=10, delay=0, monotonic=lambda: 0)
+    assert calls == ["read"]
+
+
+def test_replication_ambiguous_add_checks_topology_before_resubmitting():
+    mod = importlib.import_module(f"{BASE}.minio_site_replication")
+
+    class Client:
+        def __init__(self):
+            self.adds = 0
+
+        def add_site_replication(self, peers):
+            self.adds += 1
+            raise OSError("response connection closed")
+
+        def get_site_replication_info(self):
+            return {"enabled": True, "sites": [{"name": "two"}]}
+
+    client = Client()
+    info = mod._add_and_read_topology(
+        client,
+        ["peer"],
+        {"two"},
+        deadline=10,
+        delay=1,
+        sleep=lambda _: None,
+        monotonic=lambda: 0,
+    )
+
+    assert info["sites"] == [{"name": "two"}]
+    assert client.adds == 1
+
+
+def test_replication_retries_add_only_after_topology_confirms_it_is_missing():
+    mod = importlib.import_module(f"{BASE}.minio_site_replication")
+
+    class Client:
+        def __init__(self):
+            self.adds = 0
+
+        def add_site_replication(self, peers):
+            self.adds += 1
+            if self.adds == 1:
+                raise MinioAdminException("503", "service unavailable")
+
+        def get_site_replication_info(self):
+            if self.adds == 1:
+                return {"enabled": False, "sites": []}
+            return {"enabled": True, "sites": [{"name": "two"}]}
+
+    client = Client()
+    sleeps = []
+    info = mod._add_and_read_topology(
+        client,
+        ["peer"],
+        {"two"},
+        deadline=10,
+        delay=1,
+        sleep=sleeps.append,
+        monotonic=lambda: 0,
+    )
+
+    assert info["sites"] == [{"name": "two"}]
+    assert client.adds == 2
+    assert sleeps == [1]
+
+
 def test_replication_add_applies_requested_settings(monkeypatch):
     mod = importlib.import_module(f"{BASE}.minio_site_replication")
     monkeypatch.setattr(mod, "PeerSite", lambda *args: args)
@@ -956,6 +1161,58 @@ def test_replication_add_applies_requested_settings(monkeypatch):
     client = Client()
     assert result(mod.run, Module(params), client)["changed"] is True
     assert [call[0] for call in client.calls] == ["add", "edit"]
+    assert client.calls[1][1] == (("dep2", "https://two", 1024, True), {"name": "two", "sync_status": True})
+
+
+def test_replication_edit_serializes_server_native_bandwidth_and_sync_types():
+    mod = importlib.import_module(f"{BASE}.minio_site_replication")
+
+    class Client:
+        def __init__(self):
+            self.payload = None
+
+        def get_site_replication_info(self):
+            return {
+                "enabled": True,
+                "sites": [
+                    {
+                        "name": "two",
+                        "endpoint": "https://two",
+                        "deploymentID": "dep2",
+                        "sync": "disable",
+                        "defaultbandwidth": {"bandwidthLimitPerBucket": 0},
+                    }
+                ],
+            }
+
+        def edit_site_replication(self, peer):
+            self.payload = peer.to_dict()
+
+    params = {
+        "sites": [
+            {
+                "name": "two",
+                "endpoint": "http://two.internal",
+                "sync": False,
+                "bandwidth_limit": 0,
+            }
+        ],
+        "state": "present",
+        "force": False,
+        "remove_all": False,
+    }
+    client = Client()
+
+    assert result(mod.run, Module(params), client)["changed"] is True
+    assert client.payload == {
+        "endpoint": "http://two.internal",
+        "deploymentID": "dep2",
+        "defaultbandwidth": {"bandwidthLimitPerBucket": 0, "set": False},
+        "name": "two",
+        "sync": "disable",
+    }
+    assert isinstance(client.payload["defaultbandwidth"]["bandwidthLimitPerBucket"], int)
+    assert isinstance(client.payload["defaultbandwidth"]["set"], bool)
 
 
 def test_replication_add_check_mode_predicts_without_mutating():

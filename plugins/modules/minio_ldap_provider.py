@@ -117,7 +117,16 @@ def _is_missing(error):
     if not isinstance(error, MinioAdminException):
         return False
     message = (str(error) + " " + str(getattr(error, "_body", ""))).casefold()
-    return "doesn't exist" in message or "does not exist" in message or "not found" in message
+    return any(
+        marker in message
+        for marker in (
+            "xminioadminnosuchconfigtarget",
+            "no such named configuration target exists",
+            "doesn't exist",
+            "does not exist",
+            "not found",
+        )
+    )
 
 
 def _read_current(client, name):

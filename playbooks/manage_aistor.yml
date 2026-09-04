@@ -48,6 +48,8 @@
         enabled: true
     # Opt in only when a cluster-wide restart is acceptable.
     aistor_admin_restart_on_ldap_change: false
+    aistor_admin_restart_readiness_delay: 5
+    aistor_admin_restart_readiness_timeout: 180
     aistor_admin_policy_bindings:
       - policies: [example-read]
         group: example-readers
