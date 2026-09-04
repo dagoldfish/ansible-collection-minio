@@ -1,13 +1,24 @@
 # Changelog
 
-## Unreleased
+All notable changes to `dagoldfish.minio` are documented in this file.
 
-- Retry transient site-replication topology reads and additions, verifying the
-  topology before resubmitting an add whose response may have been lost.
+## 0.2.3 - 2026-09-05
+
+### Fixed
+
+- Retry transient site-replication topology reads, additions, edits, and
+  removals, verifying the topology before resubmitting an add whose response
+  may have been lost.
 - Send native JSON number and boolean values when editing replication bandwidth
   and synchronization settings, as required by current AIStor servers.
-
-All notable changes to `dagoldfish.minio` are documented in this file.
+- Preserve site-replication HTTP 5xx response bodies instead of allowing the
+  SDK transport to replace them with an opaque retry-exhaustion exception.
+- Preserve the final Admin API HTTP 5xx response after normal SDK retries so
+  all administration modules report the server's diagnostic body.
+- Preserve the final S3 HTTP 5xx response after normal SDK retries so bucket
+  failures retain the server's error code, message, and request identifier.
+- Return structured status, code, message, and request details for SDK failures,
+  with explicit redaction of nested site-replication credentials.
 
 ## 0.2.2 - 2026-09-03
 

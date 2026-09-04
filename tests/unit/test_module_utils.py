@@ -7,9 +7,13 @@
 from __future__ import annotations
 
 import importlib
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import pytest
-from minio.error import MinioAdminException
+from minio.error import InvalidResponseError, MinioAdminException, S3Error, ServerError
 
 MODULE = "ansible_collections.dagoldfish.minio.plugins.module_utils.minio_admin"
 
@@ -29,6 +33,7 @@ class Module:
 def test_admin_client_normalizes_endpoint_and_passes_tls_options(monkeypatch):
     helpers = importlib.import_module(MODULE)
     calls = {}
+    pool = object()
 
     def provider(access_key, secret_key):
         calls["credentials"] = (access_key, secret_key)
@@ -38,8 +43,13 @@ def test_admin_client_normalizes_endpoint_and_passes_tls_options(monkeypatch):
         calls["client"] = kwargs
         return "client"
 
+    def pool_manager(**kwargs):
+        calls["pool"] = kwargs
+        return pool
+
     monkeypatch.setattr(helpers, "MINIO_IMP_ERR", None)
     monkeypatch.setattr(helpers, "StaticProvider", provider)
+    monkeypatch.setattr(helpers, "PoolManager", pool_manager)
     monkeypatch.setattr(helpers, "MinioAdmin", client)
     module = Module(
         {
@@ -62,18 +72,148 @@ def test_admin_client_normalizes_endpoint_and_passes_tls_options(monkeypatch):
         "region": "eu-west-1",
         "secure": True,
         "cert_check": False,
+        "http_client": pool,
     }
+    assert calls["pool"]["cert_reqs"] == "CERT_NONE"
+    retry = calls["pool"]["retries"]
+    assert retry.total == 5
+    assert retry.backoff_factor == 0.2
+    assert retry.raise_on_status is False
+    assert retry.status_forcelist == [500, 502, 503, 504]
 
 
-def test_s3_client_normalizes_endpoint_and_passes_tls_options(monkeypatch):
+def test_admin_client_can_preserve_admin_error_responses(monkeypatch):
     helpers = importlib.import_module(MODULE)
     calls = {}
+    pool = object()
+
+    def pool_manager(**kwargs):
+        calls["pool"] = kwargs
+        return pool
 
     def client(**kwargs):
         calls["client"] = kwargs
         return "client"
 
     monkeypatch.setattr(helpers, "MINIO_IMP_ERR", None)
+    monkeypatch.setattr(helpers, "StaticProvider", lambda access_key, secret_key: "credentials")
+    monkeypatch.setattr(helpers, "PoolManager", pool_manager)
+    monkeypatch.setattr(helpers, "MinioAdmin", client)
+    module = Module(
+        {
+            "auth": {
+                "endpoint": "https://aistor.example.com:9000",
+                "access_key": "admin",
+                "secret_key": "secret",
+                "region": "",
+                "secure": True,
+                "validate_certs": True,
+            }
+        }
+    )
+
+    assert helpers.admin_client(module, preserve_error_response=True) == "client"
+    assert calls["client"]["http_client"] is pool
+    assert calls["pool"]["cert_reqs"] == "CERT_REQUIRED"
+    retry = calls["pool"]["retries"]
+    assert retry.total == 0
+    assert retry.raise_on_status is False
+    assert retry.status_forcelist == [500, 502, 503, 504]
+
+
+def test_single_attempt_admin_http_client_preserves_first_503_body():
+    helpers = importlib.import_module(MODULE)
+
+    class Handler(BaseHTTPRequestHandler):
+        attempts = 0
+
+        def do_PUT(self):
+            Handler.attempts += 1
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            body = b'{"Code":"PeerError","Message":"peer rejected configuration"}'
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        client = helpers.MinioAdmin(
+            endpoint=f"127.0.0.1:{server.server_port}",
+            credentials=helpers.StaticProvider("admin", "secret"),
+            secure=False,
+            http_client=helpers._single_attempt_admin_http_client(cert_check=False),
+        )
+        peer = helpers.PeerSite("site-two", "https://site-two.example.com", "admin", "secret")
+        with pytest.raises(MinioAdminException) as caught:
+            client.add_site_replication([peer])
+        assert caught.value._code == "503"
+        assert caught.value._body == '{"Code":"PeerError","Message":"peer rejected configuration"}'
+        assert Handler.attempts == 1
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_admin_http_client_preserves_final_503_body_after_retries():
+    helpers = importlib.import_module(MODULE)
+
+    class Handler(BaseHTTPRequestHandler):
+        attempts = 0
+
+        def do_GET(self):
+            Handler.attempts += 1
+            body = f'{{"Code":"PeerError","Message":"attempt {Handler.attempts}"}}'.encode()
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        client = helpers.MinioAdmin(
+            endpoint=f"127.0.0.1:{server.server_port}",
+            credentials=helpers.StaticProvider("admin", "secret"),
+            secure=False,
+            http_client=helpers._sdk_http_client(cert_check=False, retries=2),
+        )
+        with pytest.raises(MinioAdminException) as caught:
+            client.info()
+        assert caught.value._code == "503"
+        assert caught.value._body == '{"Code":"PeerError","Message":"attempt 3"}'
+        assert Handler.attempts == 3
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+def test_s3_client_normalizes_endpoint_and_passes_tls_options(monkeypatch):
+    helpers = importlib.import_module(MODULE)
+    calls = {}
+    pool = object()
+
+    def client(**kwargs):
+        calls["client"] = kwargs
+        return "client"
+
+    def pool_manager(**kwargs):
+        calls["pool"] = kwargs
+        return pool
+
+    monkeypatch.setattr(helpers, "MINIO_IMP_ERR", None)
+    monkeypatch.setattr(helpers, "PoolManager", pool_manager)
     monkeypatch.setattr(helpers, "Minio", client)
     module = Module(
         {
@@ -96,7 +236,54 @@ def test_s3_client_normalizes_endpoint_and_passes_tls_options(monkeypatch):
         "region": None,
         "secure": True,
         "cert_check": False,
+        "http_client": pool,
     }
+    retry = calls["pool"]["retries"]
+    assert retry.total == 5
+    assert retry.raise_on_status is False
+
+
+def test_s3_http_client_preserves_final_503_error_after_retries():
+    helpers = importlib.import_module(MODULE)
+
+    class Handler(BaseHTTPRequestHandler):
+        attempts = 0
+
+        def do_GET(self):
+            Handler.attempts += 1
+            body = (
+                f"<Error><Code>SlowDown</Code><Message>attempt {Handler.attempts}</Message>"
+                "<Resource>/</Resource><RequestId>request-three</RequestId></Error>"
+            ).encode()
+            self.send_response(503)
+            self.send_header("Content-Type", "application/xml")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        client = helpers.Minio(
+            endpoint=f"127.0.0.1:{server.server_port}",
+            access_key="admin",
+            secret_key="secret",
+            secure=False,
+            http_client=helpers._sdk_http_client(cert_check=False, retries=2),
+        )
+        with pytest.raises(S3Error) as caught:
+            client.list_buckets()
+        assert caught.value.code == "SlowDown"
+        assert caught.value.message == "attempt 3"
+        assert caught.value.request_id == "request-three"
+        assert Handler.attempts == 3
+    finally:
+        server.shutdown()
+        thread.join()
 
 
 def test_signed_ldap_idp_adapter_uses_current_dedicated_routes(monkeypatch):
@@ -229,6 +416,166 @@ def test_fail_from_exception_redacts_ldap_bind_password():
     with pytest.raises(FailJson) as caught:
         helpers.fail_from_exception(module, RuntimeError("LDAP rejected directory-secret"))
     assert caught.value.args[0]["msg"] == "MinIO AIStor API request failed: LDAP rejected ***"
+
+
+def test_fail_from_exception_structures_admin_error_and_redacts_site_credentials():
+    helpers = importlib.import_module(MODULE)
+    module = Module(
+        {
+            "auth": {},
+            "sites": [{"access_key": "peer-admin", "secret_key": "peer-secret"}],
+        }
+    )
+    error = MinioAdminException(
+        "503",
+        '{"Code":"PeerError","Message":"peer-admin rejected peer-secret"}',
+    )
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(module, error)
+
+    result = caught.value.args[0]
+    assert "peer-admin" not in result["msg"]
+    assert "peer-secret" not in result["msg"]
+    assert result["api_error"] == {
+        "type": "MinioAdminException",
+        "status": 503,
+        "code": "PeerError",
+        "message": "*** rejected ***",
+    }
+
+
+def test_fail_from_exception_structures_s3_error():
+    helpers = importlib.import_module(MODULE)
+    error = S3Error(
+        response=SimpleNamespace(status=503),
+        code="SlowDown",
+        message="reduce request rate",
+        resource="/backups",
+        request_id="request-three",
+        host_id=None,
+        bucket_name="backups",
+    )
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(Module({"auth": {}}), error)
+
+    assert caught.value.args[0]["api_error"] == {
+        "type": "S3Error",
+        "status": 503,
+        "code": "SlowDown",
+        "message": "reduce request rate",
+        "resource": "/backups",
+        "request_id": "request-three",
+    }
+
+
+def test_fail_from_exception_redacts_json_escaped_credentials():
+    helpers = importlib.import_module(MODULE)
+    secret = 'peer"secret\\line\nnext'
+    body = json.dumps({"Code": "PeerError", "Message": secret})
+    module = Module({"auth": {}, "sites": [{"secret_key": secret}]})
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(module, MinioAdminException("503", body))
+
+    result = caught.value.args[0]
+    assert secret not in result["msg"]
+    assert json.dumps(secret)[1:-1] not in result["msg"]
+    assert result["api_error"]["message"] == "***"
+
+
+def test_fail_from_exception_does_not_return_credentials_used_as_json_keys():
+    helpers = importlib.import_module(MODULE)
+    secret = "peer-secret"
+    body = json.dumps({secret: "rejected"})
+    module = Module({"auth": {}, "sites": [{"secret_key": secret}]})
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(module, MinioAdminException("503", body))
+
+    serialized = json.dumps(caught.value.args[0])
+    assert secret not in serialized
+    assert caught.value.args[0]["api_error"]["body_omitted"] is True
+
+
+def test_fail_from_exception_omits_oversized_admin_body():
+    helpers = importlib.import_module(MODULE)
+    body = "x" * (helpers._MAX_ERROR_BODY_LENGTH + 1)
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(Module({"auth": {}}), MinioAdminException("502", body))
+
+    details = caught.value.args[0]["api_error"]
+    assert details == {
+        "type": "MinioAdminException",
+        "status": 502,
+        "body_omitted": True,
+        "body_length": len(body),
+    }
+    assert body not in caught.value.args[0]["msg"]
+
+
+def test_fail_from_exception_omits_deeply_nested_admin_body():
+    helpers = importlib.import_module(MODULE)
+    body = "[" * 1000 + "0" + "]" * 1000
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(Module({"auth": {}}), MinioAdminException("500", body))
+
+    assert caught.value.args[0]["api_error"] == {
+        "type": "MinioAdminException",
+        "status": 500,
+        "body_omitted": True,
+        "body_length": len(body),
+    }
+
+
+def test_fail_from_exception_structures_invalid_response_without_body():
+    helpers = importlib.import_module(MODULE)
+    error = InvalidResponseError(502, "text/html", "<html>upstream failure</html>")
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(Module({"auth": {}}), error)
+
+    assert caught.value.args[0]["api_error"] == {
+        "type": "InvalidResponseError",
+        "status": 502,
+        "content_type": "text/html",
+        "body_omitted": True,
+        "body_length": 29,
+    }
+    assert "<html>" not in caught.value.args[0]["msg"]
+
+
+def test_fail_from_exception_structures_server_error():
+    helpers = importlib.import_module(MODULE)
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(Module({"auth": {}}), ServerError("upstream failure", 504))
+
+    assert caught.value.args[0]["api_error"] == {"type": "ServerError", "status": 504}
+
+
+def test_fail_from_exception_bounds_s3_diagnostics_after_redaction():
+    helpers = importlib.import_module(MODULE)
+    secret = "peer-secret"
+    message = "x" * helpers._MAX_ERROR_FIELD_LENGTH + secret
+    error = S3Error(
+        response=SimpleNamespace(status=503),
+        code="SlowDown",
+        message=message,
+        resource="/backups",
+        request_id="request-three",
+        host_id=None,
+    )
+
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(Module({"auth": {"secret_key": secret}}), error)
+
+    result = caught.value.args[0]
+    assert secret not in json.dumps(result)
+    assert result["api_error"]["message"].endswith("... [3 characters omitted]")
 
 
 def test_not_found_only_matches_admin_404():
