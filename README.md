@@ -1,12 +1,12 @@
 # `dagoldfish.minio`
 
-Manage MinIO AIStor buckets, identities, LDAP providers, policies, service
-operations, and site replication with Ansible and the official Python SDK. The
-LDAP provider module adds a narrowly scoped signed adapter for the dedicated IDP
-Admin API that minio-py 7.2.20 does not expose.
+Manage MinIO AIStor buckets, identities, LDAP providers, logging and audit
+webhooks, policies, service operations, and site replication with Ansible and the official Python SDK. The
+LDAP and webhook modules add narrowly scoped signed adapters for the dedicated
+IDP Admin API and configuration activation headers not exposed by minio-py 7.2.20.
 
 The collection is aimed at operators who want declarative, reviewable AIStor
-administration. It includes ten modules and the `aistor_admin` role, which
+administration. It includes eleven modules and the `aistor_admin` role, which
 applies them in a safe dependency order.
 
 ## Install
@@ -17,7 +17,24 @@ Install the collection from Ansible Galaxy:
 ansible-galaxy collection install dagoldfish.minio
 ```
 
-Until then, build and install the artifact locally:
+To install this release, pin its exact version:
+
+```sh
+ansible-galaxy collection install 'dagoldfish.minio:==0.3.0'
+```
+
+Or pin it in your collection requirements:
+
+```yaml
+collections:
+  - name: dagoldfish.minio
+    version: '0.3.0'
+```
+
+Automatic configuration restarts remain opt-in; see the
+[role documentation](roles/aistor_admin/README.md) for activation and recovery.
+
+Alternatively, build and install the artifact locally:
 
 ```sh
 ansible-galaxy collection build
@@ -85,6 +102,7 @@ resources while remaining disabled unless `AISTOR_MANAGE=true`.
 | `minio_ldap_provider` | Reconcile default and named LDAP identity providers |
 | `minio_policy` | Reconcile IAM policy documents |
 | `minio_policy_binding` | Attach or detach built-in and LDAP policies |
+| `minio_webhook` | Reconcile server logging and audit webhook targets |
 | `minio_service` | Restart the AIStor service through the Admin API |
 | `minio_service_account` | Manage service accounts and explicit secret rotation |
 | `minio_site_replication` | Add, edit, or explicitly remove replication peers |
@@ -110,7 +128,13 @@ so shared module defaults can be defined once when appropriate.
   rotate one intentionally. LDAP configuration changes require an AIStor
   restart; the role reports this by default and can restart automatically,
   waiting for the authenticated Admin API to become ready before continuing.
-- AIStor environment variables override SDK-managed LDAP configuration.
+- Logging and audit webhooks preserve omitted settings and existing tokens. Set
+  `update_auth_token: true` for explicit token rotation or clearing.
+- Webhook changes use the server's dynamic-activation confirmation when available.
+  Otherwise they request a restart. `aistor_admin_restart_on_config_change: true`
+  enables one shared restart for LDAP and webhook changes, with a readiness wait.
+  Restarts remain opt-in; the legacy LDAP flag still applies only when LDAP changes.
+- AIStor environment variables override API-managed LDAP and webhook configuration.
 - Groups add declared members by default. Set `purge_members: true` to remove
   undeclared members.
 - Site replication never purges undeclared peers during `state: present`.
@@ -125,6 +149,10 @@ so shared module defaults can be defined once when appropriate.
   outside production first.
 
 ## Develop and validate
+
+See the [module utilities documentation](docs/module_utilities.md) for
+shared client construction, response handling, LDAP and webhook adapters, and
+guidance on using them in collection modules.
 
 Run the complete local, non-live validation workflow from any checkout path:
 

@@ -583,3 +583,40 @@ def test_not_found_only_matches_admin_404():
     assert helpers.is_not_found(MinioAdminException("404", "missing")) is True
     assert helpers.is_not_found(MinioAdminException("403", "denied")) is False
     assert helpers.is_not_found(RuntimeError("404")) is False
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("http://operator:proxy-password@proxy.test:3128", "http://***@proxy.test:3128"),
+    ("https://user%40name:p%40ss@proxy.test/a?x=1#frag", "https://***@proxy.test/a?x=1#frag"),
+    ("http://operator@proxy.test", "http://***@proxy.test"),
+    ("http://:proxy-password@[::1]:3128", "http://***@[::1]:3128"),
+    ("http://operator:p@ss@proxy.test", "http://***@proxy.test"),
+    ("http://proxy.test/a@b", "http://proxy.test/a@b"),
+    ("https://proxy.test/path?email=a@b", "https://proxy.test/path?email=a@b"),
+    ("", ""),
+])
+def test_redact_url_credentials_preserves_destination(value, expected):
+    helpers = importlib.import_module(MODULE)
+    assert helpers.redact_url_credentials(value) == expected
+
+
+@pytest.mark.parametrize("structured", [False, True])
+def test_error_redaction_handles_encoded_and_decoded_proxy_credentials(structured):
+    helpers = importlib.import_module(MODULE)
+    proxy = "http://proxy-user:proxy%2Dpassword@proxy.test:3128"
+    module = Module({"proxy": proxy})
+    message = "Rejected " + proxy + " with proxy-password and proxy%2Dpassword for proxy-user"
+    error = MinioAdminException("400", json.dumps({"Code": "BadConfig", "Message": message})) if structured else RuntimeError(message)
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(module, error)
+    payload = caught.value.args[0]
+    assert "proxy-user" not in repr(payload)
+    assert "proxy-password" not in repr(payload) and "proxy%2Dpassword" not in repr(payload)
+    assert "proxy.test:3128" in payload["msg"]
+
+
+def test_error_redaction_masks_userinfo_in_urls_not_present_in_arguments():
+    helpers = importlib.import_module(MODULE)
+    with pytest.raises(FailJson) as caught:
+        helpers.fail_from_exception(Module({}), RuntimeError("Rejected http://user:secret@proxy.test"))
+    assert caught.value.args[0]["msg"] == "MinIO AIStor API request failed: Rejected http://***@proxy.test"

@@ -2,6 +2,38 @@
 
 All notable changes to `dagoldfish.minio` are documented in this file.
 
+## 0.3.0 - 2026-09-09
+
+### Added
+
+- Add `minio_webhook` for default and named logging/audit targets, partial updates,
+  explicit token rotation, check mode, and server-confirmed dynamic activation.
+- Add logger/audit webhook lists and opt-in `aistor_admin_restart_on_config_change`
+  to the role. Batch pending changes into one restart and readiness wait while
+  preserving the legacy LDAP restart setting's scope.
+- Add signed transport, webhook lifecycle, and actual role orchestration tests,
+  plus an opt-in disposable-server webhook integration target.
+
+### Fixed
+
+- Recognize AIStor's missing logger and audit webhook target responses while
+  preserving unrelated configuration and authentication errors.
+- Serialize webhook values with one surrounding quote layer accepted by AIStor.
+- Preserve literal assignments such as `team=ops` in webhook comments during
+  read-back, preventing repeated configuration writes and restart requests.
+- Redact URL credentials from webhook results and shared error diagnostics,
+  including stored proxy credentials omitted from task inputs, and protect proxy
+  arguments with Ansible's native secret filtering.
+- Defer LDAP policy bindings until an actual restart completes successfully when
+  LDAP changed, including when running in check mode.
+
+### Documented
+
+- Add a module utilities reference for Galaxy's Documentation tab covering
+  shared clients, configuration adapters, response handling, and diagnostics.
+- Organize the role guide with navigation, grouped settings, restart and recovery
+  guidance, and the complete role variable defaults.
+
 ## 0.2.3 - 2026-09-05
 
 ### Fixed

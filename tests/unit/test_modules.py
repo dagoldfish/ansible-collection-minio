@@ -26,6 +26,7 @@ class FailJson(Exception):
 class Module:
     def __init__(self, params, check_mode=False):
         self.params, self.check_mode = params, check_mode
+        self.no_log_values = set()
 
     def exit_json(self, **kwargs):
         raise ExitJson(kwargs)

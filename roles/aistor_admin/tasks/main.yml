@@ -96,15 +96,105 @@
   loop: "{{ aistor_admin_ldap_providers }}"
   loop_control: {label: "{{ item.name | default('_') }}"}
   register: aistor_admin_ldap_reconciliation
-  notify: Apply AIStor LDAP configuration changes
   when: aistor_admin_manage | bool
   no_log: true
 
-- name: Apply or report AIStor LDAP configuration changes
+- name: Initialize AIStor configuration activation state
+  ansible.builtin.set_fact:
+    _aistor_admin_restart_result: {ready: false}
+    _aistor_admin_pending_targets: []
+
+- name: Reconcile AIStor logger webhooks
+  dagoldfish.minio.minio_webhook:
+    auth: "{{ aistor_admin_auth }}"
+    kind: logger
+    name: "{{ item.name | default('_') }}"
+    endpoint: "{{ item.endpoint | default(omit) }}"
+    auth_token: "{{ item.auth_token | default(omit) }}"
+    update_auth_token: "{{ item.update_auth_token | default(false) }}"
+    enabled: "{{ item.enabled | default(omit) }}"
+    client_cert: "{{ item.client_cert | default(omit) }}"
+    client_key: "{{ item.client_key | default(omit) }}"
+    proxy: "{{ item.proxy | default(omit) }}"
+    queue_dir: "{{ item.queue_dir | default(omit) }}"
+    queue_size: "{{ item.queue_size | default(omit) }}"
+    batch_size: "{{ item.batch_size | default(omit) }}"
+    batch_max_size: "{{ item.batch_max_size | default(omit) }}"
+    max_retry: "{{ item.max_retry | default(omit) }}"
+    retry_interval: "{{ item.retry_interval | default(omit) }}"
+    http_timeout: "{{ item.http_timeout | default(omit) }}"
+    http_encoding: "{{ item.http_encoding | default(omit) }}"
+    tls_skip_verification: "{{ item.tls_skip_verification | default(omit) }}"
+    comment: "{{ item.comment | default(omit) }}"
+    state: "{{ item.state | default('present') }}"
+  loop: "{{ aistor_admin_logger_webhooks }}"
+  loop_control: {label: "{{ item.name | default('_') }}"}
+  register: aistor_admin_logger_webhook_reconciliation
+  when: aistor_admin_manage | bool
+  no_log: true
+
+- name: Reconcile AIStor audit webhooks
+  dagoldfish.minio.minio_webhook:
+    auth: "{{ aistor_admin_auth }}"
+    kind: audit
+    name: "{{ item.name | default('_') }}"
+    endpoint: "{{ item.endpoint | default(omit) }}"
+    auth_token: "{{ item.auth_token | default(omit) }}"
+    update_auth_token: "{{ item.update_auth_token | default(false) }}"
+    enabled: "{{ item.enabled | default(omit) }}"
+    client_cert: "{{ item.client_cert | default(omit) }}"
+    client_key: "{{ item.client_key | default(omit) }}"
+    proxy: "{{ item.proxy | default(omit) }}"
+    queue_dir: "{{ item.queue_dir | default(omit) }}"
+    queue_size: "{{ item.queue_size | default(omit) }}"
+    batch_size: "{{ item.batch_size | default(omit) }}"
+    batch_max_size: "{{ item.batch_max_size | default(omit) }}"
+    max_retry: "{{ item.max_retry | default(omit) }}"
+    retry_interval: "{{ item.retry_interval | default(omit) }}"
+    http_timeout: "{{ item.http_timeout | default(omit) }}"
+    http_encoding: "{{ item.http_encoding | default(omit) }}"
+    tls_skip_verification: "{{ item.tls_skip_verification | default(omit) }}"
+    comment: "{{ item.comment | default(omit) }}"
+    state: "{{ item.state | default('present') }}"
+  loop: "{{ aistor_admin_audit_webhooks }}"
+  loop_control: {label: "{{ item.name | default('_') }}"}
+  register: aistor_admin_audit_webhook_reconciliation
+  when: aistor_admin_manage | bool
+  no_log: true
+
+- name: Collect AIStor targets requiring activation
+  ansible.builtin.set_fact:
+    _aistor_admin_pending_targets: >-
+      {{
+        (aistor_admin_ldap_reconciliation.results | default([])
+          | selectattr('restart_required', 'defined') | selectattr('restart_required')
+          | map(attribute='provider.name') | map('regex_replace', '^', 'ldap:') | list)
+        + (aistor_admin_logger_webhook_reconciliation.results | default([])
+          | selectattr('restart_required', 'defined') | selectattr('restart_required')
+          | map(attribute='webhook.name') | map('regex_replace', '^', 'logger:') | list)
+        + (aistor_admin_audit_webhook_reconciliation.results | default([])
+          | selectattr('restart_required', 'defined') | selectattr('restart_required')
+          | map(attribute='webhook.name') | map('regex_replace', '^', 'audit:') | list)
+      }}
+    _aistor_admin_restart_authorized: >-
+      {{ aistor_admin_restart_on_config_change | bool or
+         (aistor_admin_restart_on_ldap_change | bool and aistor_admin_ldap_reconciliation is changed) }}
+  when: aistor_admin_manage | bool
+
+- name: Schedule AIStor configuration activation
+  ansible.builtin.debug:
+    msg: "Configuration activation needed for {{ _aistor_admin_pending_targets | join(', ') }}."
+  changed_when: true
+  notify: Apply AIStor configuration changes
+  when:
+    - aistor_admin_manage | bool
+    - _aistor_admin_pending_targets | length > 0
+
+- name: Apply or report AIStor configuration changes
   ansible.builtin.meta: flush_handlers
   when:
     - aistor_admin_manage | bool
-    - aistor_admin_ldap_providers | length > 0
+    - _aistor_admin_pending_targets | length > 0
 
 - name: Reconcile AIStor policy bindings
   dagoldfish.minio.minio_policy_binding:
@@ -120,7 +210,7 @@
     - aistor_admin_manage | bool
     - >-
       item.identity_provider | default('builtin') != 'ldap' or
-      aistor_admin_restart_on_ldap_change | bool or
+      _aistor_admin_restart_result.ready | default(false) | bool or
       aistor_admin_ldap_reconciliation is not changed
 
 - name: Reconcile AIStor site replication

@@ -10,12 +10,14 @@ __metaclass__ = type
 
 import json
 import os
+import re
 import traceback
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import timedelta
 from io import BytesIO
 from typing import Any, Optional
+from urllib.parse import unquote
 
 from ansible.module_utils.basic import missing_required_lib
 
@@ -23,6 +25,7 @@ __all__ = ("PeerInfo", "PeerSite", "SiteReplicationStatusOptions")
 
 _MAX_ERROR_BODY_LENGTH = 16384
 _MAX_ERROR_FIELD_LENGTH = 4096
+_URL_USERINFO = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://)([^/?#\s]+)@")
 
 MINIO_IMP_ERR = None
 try:
@@ -267,11 +270,37 @@ def ldap_idp_delete(client: Any, name: str) -> None:
     _idp_request(client, "DELETE", name)
 
 
+def redact_url_credentials(value: str) -> str:
+    """Mask URL userinfo without changing the destination or request value."""
+    return _URL_USERINFO.sub(r"\1***@", value)
+
+
+def url_sensitive_values(value: Any) -> list[str]:
+    """Collect encoded and decoded URL credentials for the common redactor."""
+    if not isinstance(value, str):
+        return []
+    values = []
+    for match in _URL_USERINFO.finditer(value):
+        userinfo = match.group(2)
+        for part in (userinfo, *userinfo.split(":", 1)):
+            if part:
+                values.extend((part, unquote(part)))
+    return values
+
+
+def register_url_credentials(module: Any, *urls: Any) -> None:
+    """Protect supplied and read-back credentials in Ansible results/invocation."""
+    for url in urls:
+        module.no_log_values.update(url_sensitive_values(url))
+
+
 def _sensitive_values(params: dict[str, Any]) -> list[Any]:
     """Collect credentials that an API error could echo in its response."""
     auth = params.get("auth", {}) if isinstance(params.get("auth", {}), dict) else {}
     values = [auth.get("access_key"), auth.get("secret_key")]
-    values.extend(params.get(field) for field in ("secret_key", "lookup_bind_password"))
+    values.extend(params.get(field) for field in ("secret_key", "lookup_bind_password", "auth_token", "proxy"))
+    for url in (auth.get("endpoint"), params.get("endpoint"), params.get("proxy")):
+        values.extend(url_sensitive_values(url))
     for site in params.get("sites", []) or []:
         if isinstance(site, dict):
             values.extend(site.get(field) for field in ("access_key", "secret_key"))
@@ -286,8 +315,8 @@ def _redact(value: Any, sensitive_values: list[Any]) -> Any:
         return [_redact(item, sensitive_values) for item in value]
     if not isinstance(value, str):
         return value
-    result = value
-    for sensitive in sensitive_values:
+    result = redact_url_credentials(value)
+    for sensitive in sorted(sensitive_values, key=lambda item: len(str(item)), reverse=True):
         result = result.replace(str(sensitive), "***")
     return result
 
@@ -393,7 +422,7 @@ def _api_error_message(details: dict[str, Any]) -> str:
 def fail_from_exception(module: Any, error: Exception) -> None:
     """Return an API failure without exposing request credentials."""
     params = module.params if isinstance(module.params, dict) else {}
-    sensitive_values = _sensitive_values(params)
+    sensitive_values = _sensitive_values(params) + list(getattr(module, "no_log_values", ()))
     details = _api_error_details(error)
     if details:
         details = _redact_api_error(details, sensitive_values)

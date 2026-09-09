@@ -11,4 +11,5 @@ action_groups:
     - minio_service_account
     - minio_site_replication
     - minio_site_replication_info
+    - minio_webhook
     - minio_user
