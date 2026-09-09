@@ -401,6 +401,8 @@ def test_native_module_output_protects_url_credentials(monkeypatch, capsys, mode
     if mode == "argument_error":
         arguments["kind"] = "invalid"
     monkeypatch.setattr(basic, "_load_params", lambda: dict(arguments))
+    # Ansible 2.21 also reads the loader's cached arguments when formatting output.
+    monkeypatch.setattr(basic, "_PARSED_MODULE_ARGS", dict(arguments, _ansible_inject_invocation=True), raising=False)
     monkeypatch.setattr(basic, "_ANSIBLE_PROFILE", "legacy", raising=False)
     monkeypatch.setattr(minio_webhook, "admin_client", lambda module: None)
     monkeypatch.setattr(minio_webhook, "read_config", lambda *args: {"endpoint": "https://receiver.test", "proxy": raw_url})
