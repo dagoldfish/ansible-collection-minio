@@ -7,6 +7,9 @@ aistor_admin_users: []
 aistor_admin_groups: []
 aistor_admin_service_accounts: []
 aistor_admin_ldap_providers: []
+aistor_admin_logger_webhooks: []
+aistor_admin_audit_webhooks: []
+aistor_admin_restart_on_config_change: false
 aistor_admin_restart_on_ldap_change: false
 aistor_admin_restart_readiness_delay: 5
 aistor_admin_restart_readiness_timeout: 180

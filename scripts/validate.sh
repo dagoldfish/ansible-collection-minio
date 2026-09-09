@@ -56,6 +56,7 @@ for validation_module in \
   minio_user \
   minio_group \
   minio_ldap_provider \
+  minio_webhook \
   minio_policy \
   minio_policy_binding \
   minio_service \
