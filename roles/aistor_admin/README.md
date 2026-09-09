@@ -44,6 +44,9 @@ safe by default because `aistor_admin_manage` is `false`.
 | `aistor_admin_groups` | `[]` | Local groups and memberships to reconcile |
 | `aistor_admin_service_accounts` | `[]` | Service accounts to reconcile |
 | `aistor_admin_ldap_providers` | `[]` | Default or named LDAP providers to reconcile |
+| `aistor_admin_logger_webhooks` | `[]` | Server logging webhook targets |
+| `aistor_admin_audit_webhooks` | `[]` | Audit webhook targets |
+| `aistor_admin_restart_on_config_change` | `false` | Restart once for pending LDAP/webhook activation |
 | `aistor_admin_restart_on_ldap_change` | `false` | Restart AIStor after LDAP changes |
 | `aistor_admin_restart_readiness_delay` | `5` | Seconds between post-restart readiness attempts |
 | `aistor_admin_restart_readiness_timeout` | `180` | Maximum seconds to wait for AIStor readiness |
@@ -120,6 +123,85 @@ overall deadline with `aistor_admin_restart_readiness_delay` and
 `aistor_admin_restart_readiness_timeout`. Server environment variables override
 configuration stored through the Admin API.
 
+### Logging and audit webhooks
+
+Each item in `aistor_admin_logger_webhooks` or `aistor_admin_audit_webhooks`
+accepts `name` (`_` for the default target), `endpoint`, `enabled`, `state`
+(`present` by default), `auth_token`, `update_auth_token`, `client_cert`,
+`client_key`, `proxy`, `queue_dir`, `queue_size`, `batch_size`, `batch_max_size`,
+`max_retry`, `retry_interval`, `http_timeout`, `http_encoding`,
+`tls_skip_verification`, and `comment`. The role supplies `kind` automatically.
+Use `dagoldfish.minio.minio_webhook` directly with `kind: logger` or `kind: audit`.
+
+```yaml
+aistor_admin_logger_webhooks:
+  - name: operations
+    endpoint: https://logs.example.com/minio
+    auth_token: "Bearer {{ vault_logger_token }}"
+aistor_admin_audit_webhooks:
+  - name: security
+    endpoint: https://audit.example.com/minio
+    queue_dir: /var/lib/minio/audit-queue
+    batch_size: 10
+    retry_interval: 3s
+    http_timeout: 5s
+aistor_admin_restart_on_config_change: true
+```
+
+Creation requires an HTTP(S) endpoint and enables the target unless explicitly
+disabled. Updates preserve omitted fields, including disabled status. Empty
+lists do nothing; undeclared targets are never purged. `state: absent` resets
+only the selected target. An unconfigured default target (disabled with no
+endpoint) counts as absent even though MinIO returns its defaults on read.
+
+Tokens are treated as unreadable. They are set on creation and otherwise
+preserved unless `update_auth_token: true`. With that flag, `auth_token: ""`
+clears authentication. Explicit rotations always report a change; remove the
+flag after rotating. Tokens are excluded from module results and redacted from
+API diagnostics. Supply the complete header value, including `Bearer` if needed.
+
+Queue and certificate paths refer to MinIO servers, not the Ansible controller.
+Provision directories, certificates, and permissions separately on each server.
+A persistent queue retains undelivered events while the receiver is unavailable;
+this role does not create it or guarantee delivery. Optional fields vary by
+server version; changed settings are checked against server configuration help
+before writing, so unsupported keys cannot be silently ignored. Omitted
+fields retain server defaults rather than imposing a version-specific baseline.
+Environment variables take precedence over stored API configuration and cannot
+be removed by this role. Module results describe stored configuration, not
+receiver health. Names allow letters, digits, underscores, and hyphens. Values
+containing newlines, NULs, or embedded webhook `key=` markers are rejected because
+MinIO's configuration parser cannot safely represent them. Literal quotes and
+backslashes are preserved without shell escaping.
+
+### Coordinated activation and restarts
+
+After reconciling LDAP and both webhook lists, the role gathers targets whose
+modules report `restart_required`. The webhook adapter inspects
+`x-minio-config-applied: true` on successful writes and resets, following the
+[MinIO Admin client's activation contract](https://github.com/minio/madmin-go/blob/main/config-kv-commands.go).
+A confirmed dynamic change does not request a restart; an absent or unrecognized
+header conservatively does. LDAP changes still require a restart.
+
+`aistor_admin_restart_on_config_change: true` authorizes one shared Admin API
+restart followed by the existing readiness wait. The legacy
+`aistor_admin_restart_on_ldap_change` authorizes that restart only when LDAP
+changed; it does not authorize webhook-only restarts. A restart activates all
+stored configuration, including other changes already staged on the server.
+Restart/readiness failures stop reconciliation before policy bindings.
+
+With automatic restarts disabled, the role reports affected target names and
+defers LDAP bindings when LDAP changed. In check mode it predicts possible
+webhook restart requirements without writing configuration or restarting, and
+defers bindings dependent on changed LDAP even if automatic restarts are enabled.
+
+Pending reports cover this invocation only. Stored configuration matching the
+playbook does not prove that an earlier deferred or failed restart completed.
+To recover, explicitly run `dagoldfish.minio.minio_service` with
+`wait_for_ready: true`, then rerun the role. This is a service-wide restart,
+not rolling orchestration, and the Admin readiness check is not a webhook
+end-to-end delivery check.
+
 ### Policy bindings
 
 Each `aistor_admin_policy_bindings` item accepts `policies` and exactly one of
@@ -149,9 +231,9 @@ the complete topology requires `state: absent`, `force: true`,
 ## Ordering and idempotency
 
 The role reconciles buckets, policies, users, groups, service accounts, LDAP
-providers, policy bindings, and finally site replication. This permits later
-resources to reference earlier ones. LDAP changes are applied or reported
-through a handler before LDAP bindings. Empty resource lists are no-ops, and
+providers, logger/audit webhooks, policy bindings, and finally site replication. This permits later
+resources to reference earlier ones. Pending configuration changes are applied or reported
+through one shared handler before LDAP bindings. Empty resource lists are no-ops, and
 undeclared resources are not purged.
 
 Run with `--check` to preview all supported changes. The role intentionally
@@ -159,3 +241,15 @@ fails on LDAP binding operations in check mode instead of claiming an
 idempotency guarantee the SDK cannot provide.
 
 See `playbooks/manage_aistor.yml` for a complete environment-backed example.
+
+## Disposable webhook integration test
+
+The `aistor_webhooks` integration target requires `AISTOR_IT_WEBHOOKS=true`,
+`AISTOR_IT_ENDPOINT`, `AISTOR_IT_ACCESS_KEY`, `AISTOR_IT_SECRET_KEY`, and
+`AISTOR_IT_WEBHOOK_ENDPOINT`. The receiver must be reachable from MinIO and
+accept log requests without authentication. Optional `AISTOR_IT_SECURE` and
+`AISTOR_IT_VALIDATE_CERTS` default to `true`. Run
+`ansible-test integration aistor_webhooks --allow-destructive --allow-unsupported`
+only against a disposable deployment: the target sends real events and may
+restart MinIO. It exercises both kinds with isolated names, repeats configuration,
+previews disabling, and removes its targets in an `always` block.

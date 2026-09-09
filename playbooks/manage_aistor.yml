@@ -46,7 +46,19 @@
         group_search_base_dn: ou=groups,dc=partners,dc=example
         group_search_filter: "(&(objectClass=groupOfNames)(member=%d))"
         enabled: true
+    aistor_admin_logger_webhooks:
+      - name: operations
+        endpoint: https://logs.example.com/minio
+        auth_token: "{{ lookup('ansible.builtin.env', 'AISTOR_LOGGER_TOKEN') }}"
+        batch_size: 10
+    aistor_admin_audit_webhooks:
+      - name: security
+        endpoint: https://audit.example.com/minio
+        auth_token: "{{ lookup('ansible.builtin.env', 'AISTOR_AUDIT_TOKEN') }}"
+        # Provision this writable directory on each MinIO server first.
+        queue_dir: /var/lib/minio/audit-queue
     # Opt in only when a cluster-wide restart is acceptable.
+    aistor_admin_restart_on_config_change: false
     aistor_admin_restart_on_ldap_change: false
     aistor_admin_restart_readiness_delay: 5
     aistor_admin_restart_readiness_timeout: 180

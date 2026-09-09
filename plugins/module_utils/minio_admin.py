@@ -271,7 +271,7 @@ def _sensitive_values(params: dict[str, Any]) -> list[Any]:
     """Collect credentials that an API error could echo in its response."""
     auth = params.get("auth", {}) if isinstance(params.get("auth", {}), dict) else {}
     values = [auth.get("access_key"), auth.get("secret_key")]
-    values.extend(params.get(field) for field in ("secret_key", "lookup_bind_password"))
+    values.extend(params.get(field) for field in ("secret_key", "lookup_bind_password", "auth_token"))
     for site in params.get("sites", []) or []:
         if isinstance(site, dict):
             values.extend(site.get(field) for field in ("access_key", "secret_key"))
