@@ -21,7 +21,7 @@ To test the 0.3.0 development release, pin its exact version (Galaxy skips
 prereleases during ordinary installation):
 
 ```sh
-ansible-galaxy collection install 'dagoldfish.minio:==0.3.0-dev.1' --force
+ansible-galaxy collection install 'dagoldfish.minio:==0.3.0-dev.2' --force
 ```
 
 Or pin it in your collection requirements:
@@ -29,7 +29,7 @@ Or pin it in your collection requirements:
 ```yaml
 collections:
   - name: dagoldfish.minio
-    version: '0.3.0-dev.1'
+    version: '0.3.0-dev.2'
 ```
 
 This prerelease is intended for remote-site validation before the stable 0.3.0

@@ -2,7 +2,7 @@
 
 All notable changes to `dagoldfish.minio` are documented in this file.
 
-## Unreleased
+## 0.3.0-dev.2 - 2026-09-09
 
 ### Fixed
 
