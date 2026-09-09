@@ -45,9 +45,9 @@ def config_text(config):
         value = str(value)
         if any(char in value for char in ("\n", "\r", "\x00")) or any(field + "=" in value for field in WIRE_FIELDS):
             raise ValueError("Webhook field %s contains a value that MinIO KVS cannot safely represent" % key)
-        # The server strips one double-quote layer followed by one single-quote
-        # layer. Supplying both preserves literal quotes and backslashes too.
-        values.append(key + '=\"\'' + value + '\'\"')
+        # AIStor strips a single surrounding quote layer. Nesting single
+        # quotes inside double quotes turns enable=on into literal 'on'.
+        values.append(key + '="' + value + '"')
     return " ".join(values)
 
 
@@ -98,7 +98,7 @@ def _missing_target(error):
     code = body.get("Code", body.get("code", ""))
     message = body.get("Message", body.get("message", ""))
     return code == "XMinioAdminNoSuchConfigTarget" or (
-        code == "XMinioAdminConfigBadJSON" and isinstance(message, str)
+        code in ("XMinioAdminConfigBadJSON", "XMinioConfigError") and isinstance(message, str)
         and re.fullmatch(r"there is no target `[^`]+` for subsystem `(?:logger|audit)_webhook`", message) is not None
     )
 

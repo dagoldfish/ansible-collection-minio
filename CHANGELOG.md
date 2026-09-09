@@ -2,6 +2,16 @@
 
 All notable changes to `dagoldfish.minio` are documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- Recognize AIStor's `XMinioConfigError` as an absent webhook target only when
+  its message precisely describes a missing logger or audit target. Preserve
+  unrelated configuration and authentication errors.
+- Serialize webhook values with one surrounding quote layer, fixing AIStor's
+  rejection of nested-quoted settings such as `enable="'on'"` in 0.3.0-dev.1.
+
 ## 0.3.0-dev.1 - 2026-09-09
 
 Development release for remote-site validation before the stable 0.3.0 release.

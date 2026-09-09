@@ -158,9 +158,16 @@ def test_invalid_inputs_fail_before_api_read(config, options):
 def test_serializer_matches_server_sanitization(value):
     text = webhook_config.config_text({"auth_token": value})
     encoded = text.split("=", 1)[1].strip()
-    # MinIO SanitizeValue removes one double layer then one single layer.
-    decoded = encoded.removeprefix('"').removesuffix('"').removeprefix("'").removesuffix("'")
+    # AIStor strips one surrounding quote layer, retaining literal quotes inside.
+    decoded = encoded.removeprefix('"').removesuffix('"')
     assert decoded == value
+
+
+def test_boolean_serialization_uses_one_quote_layer():
+    # Live AIStor rejects the old enable="'on'" wire value as invalid.
+    assert webhook_config.config_text({"enable": "on", "tls_skip_verification": "off"}) == (
+        'enable="on" tls_skip_verification="off"'
+    )
 
 
 def test_parse_real_minio_output_not_shell_escaping():
@@ -214,10 +221,11 @@ def test_signed_transport_and_response_cleanup(monkeypatch, method, applied):
     if method == "get":
         assert webhook_config.read_config(client, "audit_webhook:security")["endpoint"] == "https://receiver.test"
     else:
-        changes = {"auth_token": 'Bearer a"b'} if method == "set" else None
+        changes = {"enable": "on", "auth_token": 'Bearer a"b'} if method == "set" else None
         assert webhook_config.write_config(client, "audit_webhook:security", changes) is (applied != "true")
         plaintext = decrypt(webhook_config._BufferedAdminResponse(requests[0][2]["body"]), "test-secret").decode()
-        assert plaintext == ("audit_webhook:security " + webhook_config.config_text(changes) if changes else "audit_webhook:security")
+        assert plaintext == ('audit_webhook:security enable="on" auth_token="Bearer a"b"'
+                             if changes else "audit_webhook:security")
     verb, url, kwargs = requests[0]
     assert verb == {"get": "GET", "set": "PUT", "delete": "DELETE"}[method]
     assert "/minio/admin/v3/" + {"get": "get-config-kv", "set": "set-config-kv", "delete": "del-config-kv"}[method] in url
@@ -232,6 +240,13 @@ def test_signed_transport_and_response_cleanup(monkeypatch, method, applied):
     ("XMinioAdminConfigBadJSON", "there is no target `security` for subsystem `audit_webhook`", True),
     ("AccessDenied", "not found", False),
     ("XMinioAdminConfigBadJSON", "unknown subsystem", False),
+    ("XMinioConfigError", "there is no target `security` for subsystem `audit_webhook`", True),
+    ("XMinioConfigError", "there is no target `operations` for subsystem `logger_webhook`", True),
+    ("XMinioConfigError", "unknown subsystem", False),
+    ("XMinioConfigError", "there is no target `security` for subsystem `notify_webhook`", False),
+    ("XMinioConfigError", "there is no target `security` for subsystem `audit_webhook`; access denied", False),
+    ("XMinioConfigError", None, False),
+    ("AccessDenied", "there is no target `security` for subsystem `audit_webhook`", False),
 ])
 def test_only_missing_target_errors_are_absent(code, message, missing):
     def request(**kwargs):
