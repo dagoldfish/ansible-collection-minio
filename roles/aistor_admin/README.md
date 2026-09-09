@@ -159,6 +159,12 @@ preserved unless `update_auth_token: true`. With that flag, `auth_token: ""`
 clears authentication. Explicit rotations always report a change; remove the
 flag after rotating. Tokens are excluded from module results and redacted from
 API diagnostics. Supply the complete header value, including `Bearer` if needed.
+Proxy input is also sensitive. Returned endpoint/proxy URLs mask embedded
+credentials, including credentials read from the server when the corresponding
+parameter was omitted. Encoded and decoded URL credentials are registered with
+Ansible's secret filtering and the collection's shared diagnostic redactor, so
+module output stays protected when task-level `no_log` is disabled for debugging.
+Raw URLs are still used for reconciliation and requests.
 
 Queue and certificate paths refer to MinIO servers, not the Ansible controller.
 Provision directories, certificates, and permissions separately on each server.
@@ -172,7 +178,8 @@ be removed by this role. Module results describe stored configuration, not
 receiver health. Names allow letters, digits, underscores, and hyphens. Values
 containing newlines, NULs, or embedded webhook `key=` markers are rejected because
 MinIO's configuration parser cannot safely represent them. Literal quotes and
-backslashes are preserved without shell escaping.
+backslashes are preserved without shell escaping. Assignments such as
+`team=ops` inside comments remain literal values and do not trigger repeat writes.
 
 ### Coordinated activation and restarts
 

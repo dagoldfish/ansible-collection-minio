@@ -16,6 +16,11 @@ All notable changes to `dagoldfish.minio` are documented in this file.
 
 ### Fixed
 
+- Preserve literal assignments such as `team=ops` in webhook comments during
+  read-back, preventing repeated configuration writes and restart requests.
+- Redact URL credentials from webhook results and shared error diagnostics,
+  including stored proxy credentials omitted from task inputs, and protect proxy
+  arguments with Ansible's native secret filtering.
 - Defer LDAP policy bindings until an actual restart completes successfully when
   LDAP changed, including when running in check mode.
 

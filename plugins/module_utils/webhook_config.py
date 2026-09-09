@@ -24,7 +24,9 @@ WIRE_FIELDS = (
     "queue_dir", "queue_size", "batch_size", "batch_max_size", "max_retry",
     "retry_interval", "http_timeout", "http_encoding", "tls_skip_verification", "comment",
 )
-_KEY = re.compile(r"(?:^|\s)([a-z][a-z0-9_]*)=")
+# Match the same key vocabulary used when validating writes. Arbitrary
+# assignments such as team=ops inside a comment are part of the value.
+_KEY = re.compile(r"(?:^|\s)(" + "|".join(re.escape(field) for field in WIRE_FIELDS) + r")=")
 
 
 def target_key(kind, name):

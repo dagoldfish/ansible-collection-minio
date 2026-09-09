@@ -17,6 +17,7 @@ description:
   - Creates, updates, disables, and removes individual webhook targets through the signed Admin API.
   - Omitted settings and undeclared targets are preserved. New targets are enabled by default.
   - Server environment variables override stored configuration. Certificate and queue paths are on the server.
+  - URL credentials are redacted from returned configuration and diagnostics.
   - Reports whether a restart is needed; never restarts the service itself.
   - Optional settings depend on the server version. Unsupported settings are rejected using server configuration help before writing.
 options:
@@ -45,7 +46,7 @@ options:
     default: false
   client_cert: {description: Server-local mTLS certificate path., type: str}
   client_key: {description: Server-local mTLS private key path., type: str}
-  proxy: {description: Proxy URL used by MinIO to reach the webhook., type: str}
+  proxy: {description: Proxy URL used by MinIO to reach the webhook. Treated as sensitive input., type: str}
   queue_dir: {description: Existing writable server-local directory for persistent undelivered events., type: str}
   queue_size: {description: Maximum queued events. Must be positive., type: int}
   batch_size: {description: Events per batch. Must be positive., type: int}
@@ -112,6 +113,8 @@ from ansible_collections.dagoldfish.minio.plugins.module_utils.minio_admin impor
     admin_client,
     auth_argument_spec,
     fail_from_exception,
+    redact_url_credentials,
+    register_url_credentials,
 )
 from ansible_collections.dagoldfish.minio.plugins.module_utils.webhook_config import (
     config_text,
@@ -178,7 +181,7 @@ def _public(kind, name, current):
     result = {"kind": kind, "name": name}
     for field in STRING_FIELDS:
         if field in current:
-            result[field] = current[field]
+            result[field] = redact_url_credentials(current[field]) if field in ("endpoint", "proxy") else current[field]
     for field in INT_FIELDS:
         if current.get(field) not in (None, ""):
             result[field] = int(current[field])
@@ -191,12 +194,14 @@ def _public(kind, name, current):
 
 def run(module, client):
     params = module.params
+    register_url_credentials(module, params.get("endpoint"), params.get("proxy"))
     kind, name = params["kind"], params["name"]
     key = target_key(kind, name)
     _validate(params)
     current = read_config(client, key)
     exists = current is not None
     current = dict(current or {})
+    register_url_credentials(module, current.get("endpoint"), current.get("proxy"))
     # A reset default target is still returned by MinIO, with no endpoint.
     if name == "_" and not current.get("endpoint") and not _bool(current.get("enable", "off")):
         exists = False
@@ -259,6 +264,7 @@ def main():
     spec.update({field: {"type": "str"} for field in STRING_FIELDS})
     spec.update({field: {"type": "int"} for field in INT_FIELDS})
     spec.update({field: {"type": "bool"} for field in BOOL_FIELDS})
+    spec["proxy"]["no_log"] = True  # May contain credentials; also protect argument-validation failures.
     spec["client_key"]["no_log"] = False  # Server-side path, not private key contents.
     spec["http_encoding"]["choices"] = ["json", "cbor"]
     module = AnsibleModule(argument_spec=spec, supports_check_mode=True)

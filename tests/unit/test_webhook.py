@@ -290,3 +290,133 @@ def test_unsupported_settings_never_write(config, monkeypatch, check):
     with pytest.raises(ValueError, match="unsupported"):
         run(config, check=check, endpoint="https://receiver.test", http_encoding="cbor")
     assert config.calls == [("get", "audit_webhook:security")]
+
+
+@pytest.mark.parametrize("comment", [
+    "managed by team=ops",
+    'managed by team="ops" owner=storage',
+    'team=ops uses "quoted" labels and path=C:\\logs',
+])
+@pytest.mark.parametrize("kind,name", [("logger", "_"), ("audit", "security")])
+def test_comment_round_trip_does_not_rewrite_or_restart(monkeypatch, comment, kind, name):
+    stored = {}
+    writes = []
+
+    def read(client, key):
+        if not stored:
+            return None
+        # MinIO's response wraps values containing whitespace, without shell
+        # escaping. Exercise the real parser rather than returning a dict.
+        fields = [field + '=' + ('"' + value + '"' if any(c.isspace() for c in value) else value)
+                  for field, value in stored.items() if field != "enable"]
+        target = kind + "_webhook" + (":" + name if name != "_" else "")
+        return webhook_config.parse_config(target + " " + " ".join(fields), key)
+
+    def write(client, key, changes):
+        webhook_config.config_text(changes)
+        writes.append(dict(changes))
+        stored.update(changes)
+        return True  # Any spurious write would request a disruptive restart.
+
+    monkeypatch.setattr(minio_webhook, "read_config", read)
+    monkeypatch.setattr(minio_webhook, "write_config", write)
+    monkeypatch.setattr(minio_webhook, "validate_config_fields", lambda *args: None)
+    options = params(kind=kind, name=name, endpoint="https://receiver.test", comment=comment)
+    first = result(minio_webhook.run, Module(options), None)
+    assert first["changed"] and first["restart_required"]
+    for check in (False, True):
+        repeated = result(minio_webhook.run, Module(options, check), None)
+        assert not repeated["changed"] and not repeated["restart_required"]
+        assert repeated["webhook"]["comment"] == comment
+    assert len(writes) == 1
+
+
+@pytest.mark.parametrize("field", ["endpoint", "proxy"])
+@pytest.mark.parametrize("check", [False, True])
+def test_stored_url_credentials_are_redacted_when_parameter_omitted(config, field, check):
+    raw_url = "http://operator:proxy%2Dpassword@proxy.test:3128/path?region=west"
+    config.current = {"endpoint": "https://receiver.test", field: raw_url}
+    module = Module(params(), check)
+    out = result(minio_webhook.run, module, config)
+    assert not out["changed"]
+    assert out["webhook"][field] == "http://***@proxy.test:3128/path?region=west"
+    assert "operator" not in repr(out) and "password" not in repr(out)
+    assert config.current[field] == raw_url
+    assert {"operator", "proxy%2Dpassword", "proxy-password"} <= module.no_log_values
+
+
+def test_proxy_update_uses_raw_credentials_and_remains_idempotent(config):
+    raw_url = "http://operator:proxy-password@proxy.test:3128"
+    config.current = {"endpoint": "https://receiver.test", "proxy": "http://old.test"}
+    out = run(config, proxy=raw_url)
+    assert out["changed"]
+    assert config.calls[-1][2]["proxy"] == raw_url
+    assert out["webhook"]["proxy"] == "http://***@proxy.test:3128"
+    assert not run(config, proxy=raw_url)["changed"]
+
+
+def test_existing_proxy_credentials_redacted_from_update_errors(config, monkeypatch):
+    raw_url = "http://operator:proxy%2Dpassword@proxy.test:3128"
+    config.current = {"endpoint": "https://receiver.test", "proxy": raw_url}
+    module = Module(params(comment="new comment"))
+
+    def rejected(client, key, changes):
+        raise MinioAdminException("400", json.dumps({
+            "Code": "BadConfig", "Message": "Rejected " + raw_url + " password proxy-password for operator",
+        }))
+
+    monkeypatch.setattr(minio_webhook, "write_config", rejected)
+    with pytest.raises(MinioAdminException) as raised:
+        minio_webhook.run(module, config)
+    with pytest.raises(FailJson) as caught:
+        minio_admin.fail_from_exception(module, raised.value)
+    payload = caught.value.args[0]
+    assert "operator" not in repr(payload)
+    assert "proxy-password" not in repr(payload) and "proxy%2Dpassword" not in repr(payload)
+    assert "proxy.test:3128" in payload["msg"]
+
+
+def test_proxy_is_sensitive_during_module_argument_validation(monkeypatch):
+    def construct(**kwargs):
+        assert kwargs["argument_spec"]["proxy"]["no_log"] is True
+        raise FailJson("argument validation intercepted")
+
+    monkeypatch.setattr(minio_webhook, "AnsibleModule", construct)
+    with pytest.raises(FailJson, match="argument validation intercepted"):
+        minio_webhook.main()
+
+
+@pytest.mark.parametrize("mode", ["unchanged", "readback_error", "argument_error"])
+@pytest.mark.parametrize("supply_proxy", [False, True])
+def test_native_module_output_protects_url_credentials(monkeypatch, capsys, mode, supply_proxy):
+    from ansible.module_utils import basic
+
+    raw_url = "http://operator:proxy%2Dpassword@proxy.test:3128"
+    arguments = params(auth={"endpoint": "admin.test", "access_key": "access-key", "secret_key": "secret-key"},
+                       _ansible_no_log=False, _ansible_verbosity=3)
+    if supply_proxy:
+        arguments["proxy"] = raw_url
+    if mode == "readback_error":
+        arguments["comment"] = "new comment"
+    if mode == "argument_error":
+        arguments["kind"] = "invalid"
+    monkeypatch.setattr(basic, "_load_params", lambda: dict(arguments))
+    monkeypatch.setattr(basic, "_ANSIBLE_PROFILE", "legacy", raising=False)
+    monkeypatch.setattr(minio_webhook, "admin_client", lambda module: None)
+    monkeypatch.setattr(minio_webhook, "read_config", lambda *args: {"endpoint": "https://receiver.test", "proxy": raw_url})
+    monkeypatch.setattr(minio_webhook, "validate_config_fields", lambda *args: None)
+
+    def reject(*args):
+        raise MinioAdminException("400", json.dumps({"Code": "BadConfig", "Message": "Rejected operator using proxy-password"}))
+
+    monkeypatch.setattr(minio_webhook, "write_config", reject)
+    with pytest.raises(SystemExit) as exited:
+        minio_webhook.main()
+    assert exited.value.code == (0 if mode == "unchanged" else 1)
+    output = capsys.readouterr().out
+    assert "operator" not in output and "proxy-password" not in output and "proxy%2Dpassword" not in output
+    payload = json.loads(output)
+    assert "invocation" in payload
+    if mode == "unchanged":
+        assert payload["webhook"]["proxy"] == "http://***@proxy.test:3128"
+        assert payload["changed"] is False
