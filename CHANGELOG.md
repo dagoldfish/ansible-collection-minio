@@ -2,7 +2,7 @@
 
 All notable changes to `dagoldfish.minio` are documented in this file.
 
-## 0.3.0 - Unreleased
+## 0.3.0 - 2026-09-09
 
 ### Added
 
@@ -26,6 +26,13 @@ All notable changes to `dagoldfish.minio` are documented in this file.
   arguments with Ansible's native secret filtering.
 - Defer LDAP policy bindings until an actual restart completes successfully when
   LDAP changed, including when running in check mode.
+
+### Documented
+
+- Add a module utilities reference for Galaxy's Documentation tab covering
+  shared clients, configuration adapters, response handling, and diagnostics.
+- Organize the role guide with navigation, grouped settings, restart and recovery
+  guidance, and the complete role variable defaults.
 
 ## 0.2.3 - 2026-09-05
 

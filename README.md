@@ -17,11 +17,10 @@ Install the collection from Ansible Galaxy:
 ansible-galaxy collection install dagoldfish.minio
 ```
 
-To test the 0.3.0 development release, pin its exact version (Galaxy skips
-prereleases during ordinary installation):
+To install this release, pin its exact version:
 
 ```sh
-ansible-galaxy collection install 'dagoldfish.minio:==0.3.0-dev.2' --force
+ansible-galaxy collection install 'dagoldfish.minio:==0.3.0'
 ```
 
 Or pin it in your collection requirements:
@@ -29,11 +28,10 @@ Or pin it in your collection requirements:
 ```yaml
 collections:
   - name: dagoldfish.minio
-    version: '0.3.0-dev.2'
+    version: '0.3.0'
 ```
 
-This prerelease is intended for remote-site validation before the stable 0.3.0
-release. Automatic configuration restarts remain opt-in; see the
+Automatic configuration restarts remain opt-in; see the
 [role documentation](roles/aistor_admin/README.md) for activation and recovery.
 
 Alternatively, build and install the artifact locally:
