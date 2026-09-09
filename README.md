@@ -152,6 +152,10 @@ so shared module defaults can be defined once when appropriate.
 
 ## Develop and validate
 
+See the [module utilities documentation](docs/module_utilities.md) for
+shared client construction, response handling, LDAP and webhook adapters, and
+guidance on using them in collection modules.
+
 Run the complete local, non-live validation workflow from any checkout path:
 
 ```sh
