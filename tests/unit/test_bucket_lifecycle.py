@@ -74,3 +74,36 @@ def test_missing_bucket_preview_and_empty_rules_do_not_read():
 def test_invalid_rules(rules):
     with pytest.raises(ValueError):
         desired_rules(rules)
+
+
+@pytest.mark.parametrize("check", [True, False])
+def test_server_omits_zero_transition_days(check):
+    client = Mock()
+    client._execute.return_value.data = b"""
+        <LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+          <Rule><ID>move</ID><Status>Enabled</Status><Filter/>
+          <Transition><StorageClass>ARCHIVE</StorageClass></Transition></Rule>
+        </LifecycleConfiguration>"""
+    rules = desired_rules([dict(id="move", transition_tier="ARCHIVE", transition_days=0)])
+    assert not reconcile_lifecycle(client, BUCKET, rules, True, check)
+    client._execute.assert_called_once_with("GET", BUCKET, query_params={"lifecycle": ""})
+
+
+def test_update_preserves_carriage_returns_in_prefixes():
+    client = Mock()
+    client._execute.return_value.data = b"""
+        <LifecycleConfiguration><Rule><ID>external</ID><Filter><Prefix>a&#13;b</Prefix></Filter>
+        <Status>Enabled</Status><Expiration><Days>5</Days></Expiration></Rule></LifecycleConfiguration>"""
+    rules = desired_rules([dict(id="managed", prefix="log\r/", expiration_days=30)])
+    assert reconcile_lifecycle(client, BUCKET, rules, True, False)
+    body = client._execute.call_args.kwargs["body"]
+    assert [node.text for node in ET.fromstring(body).findall(".//Prefix")] == ["a\rb", "log\r/"]
+    client._execute.return_value.data = body
+    assert not reconcile_lifecycle(client, BUCKET, rules, True, False)
+
+
+def test_rule_id_limit_counts_utf8_bytes():
+    identifier = "é" * 127 + "a"
+    assert identifier in desired_rules([dict(id=identifier, expiration_days=1)])
+    with pytest.raises(ValueError, match="255 UTF-8 bytes"):
+        desired_rules([dict(id=identifier + "b", expiration_days=1)])

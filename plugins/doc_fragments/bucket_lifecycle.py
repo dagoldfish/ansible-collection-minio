@@ -17,7 +17,7 @@ options:
     type: list
     elements: dict
     suboptions:
-      id: {description: Unique lifecycle rule ID., type: str, required: true}
+      id: {description: Unique lifecycle rule ID of at most 255 UTF-8 bytes., type: str, required: true}
       state: {description: Create or replace the rule or remove it by ID., type: str, choices: [present, absent], default: present}
       enabled: {description: Activate this rule., type: bool, default: true}
       prefix: {description: Match keys starting with this prefix. Empty matches all keys., type: str, default: ''}

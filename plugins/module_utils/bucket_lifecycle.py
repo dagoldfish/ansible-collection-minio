@@ -31,8 +31,8 @@ def desired_rules(rules):
     desired = {}
     for rule in rules or []:
         identifier = rule["id"]
-        if not identifier.strip() or len(identifier) > 255 or identifier in desired:
-            raise ValueError("Each lifecycle rule needs a unique, nonempty ID of at most 255 characters.")
+        if not identifier.strip() or len(identifier.encode("utf-8")) > 255 or identifier in desired:
+            raise ValueError("Each lifecycle rule needs a unique, nonempty ID of at most 255 UTF-8 bytes.")
         desired[identifier] = None
         if rule.get("state") == "absent":
             continue
@@ -83,6 +83,11 @@ def _signature(element):
     namespace = element.tag.rpartition("}")[0] + "}" if element.tag.startswith("{") else ""
     if element.tag == namespace + "Filter" and children == [(namespace + "Prefix", "", [], [])]:
         children = []
+    # MinIO omits Days on readback for an immediate tier transition.
+    if element.tag == namespace + "Transition" and element.find(namespace + "Date") is None:
+        zero_days = (namespace + "Days", "0", [], [])
+        if zero_days in children:
+            children.remove(zero_days)
     value = "" if len(element) else element.text or ""
     return element.tag, value, sorted(element.attrib.items()), children
 
@@ -125,7 +130,8 @@ def reconcile_lifecycle(client, name, desired, exists, check_mode):
         changed = True
     if changed and not check_mode:
         if len(root):
-            body = ET.tostring(root, encoding="utf-8")
+            # XML parsers normalize literal carriage returns to line feeds.
+            body = ET.tostring(root, encoding="utf-8").replace(b"\r", b"&#13;")
             client._execute(
                 "PUT", name, body=body, headers={"Content-MD5": md5sum_hash(body)},
                 query_params={"lifecycle": ""},
