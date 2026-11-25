@@ -1425,8 +1425,9 @@ def test_bucket_refuses_to_turn_off_enabled_versioning(monkeypatch, check, reque
     admin.assert_not_called()
 
 
-@pytest.mark.parametrize("requested,current", [("disabled", None), ("disabled", "Suspended"),
-                                              ("enabled", "Enabled"), ("suspended", "Suspended")])
+@pytest.mark.parametrize("requested,current", [
+    ("disabled", None), ("disabled", "Suspended"), ("enabled", "Enabled"), ("suspended", "Suspended"),
+])
 def test_bucket_versioning_already_satisfied(monkeypatch, requested, current):
     from minio.versioningconfig import VersioningConfig
 
