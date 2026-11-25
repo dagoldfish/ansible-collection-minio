@@ -20,6 +20,7 @@ documentation: https://github.com/dagoldfish/ansible-collection-minio#readme
 homepage: https://github.com/dagoldfish/ansible-collection-minio
 issues: https://github.com/dagoldfish/ansible-collection-minio/issues
 build_ignore:
+  - AGENTS.md
   - .agents
   - .ansible
   - .codex
