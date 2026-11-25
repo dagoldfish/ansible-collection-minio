@@ -16,6 +16,7 @@ short_description: Manage a MinIO AIStor bucket
 description:
   - Creates buckets and removes empty buckets through the official Python SDK.
   - Region and object-lock settings apply only when a bucket is created.
+extends_documentation_fragment: dagoldfish.minio.bucket_lifecycle
 options:
   auth:
     description: MinIO connection settings.
@@ -48,7 +49,7 @@ options:
 author: [Geoffrey Burger (@dagoldfish)]
 requirements: [minio >= 7.2.20]
 attributes:
-  check_mode: {support: full, description: "Predicts bucket creation, removal, quota, and versioning changes."}
+  check_mode: {support: full, description: "Predicts bucket creation, removal, quota, versioning, and lifecycle changes."}
 """
 
 EXAMPLES = r"""
@@ -87,6 +88,11 @@ bucket:
 from dataclasses import replace
 
 from ansible.module_utils.basic import AnsibleModule
+from ansible_collections.dagoldfish.minio.plugins.module_utils.bucket_lifecycle import (
+    desired_rules,
+    reconcile_lifecycle,
+    rules_argument_spec,
+)
 from ansible_collections.dagoldfish.minio.plugins.module_utils.minio_admin import (
     admin_client,
     auth_argument_spec,
@@ -133,6 +139,7 @@ def run(module, client):
             module.fail_json(msg="Unable to turn off versioning on a bucket that already has it enabled.")
         if versioning != "disabled" and current_version.status != versioning.title():
             version_update = replace(current_version, status=versioning.title())
+    rules = desired_rules(module.params.get("lifecycle_rules"))
     changed = False
     try:
         if not exists:
@@ -151,9 +158,10 @@ def run(module, client):
             if not module.check_mode:
                 client.set_bucket_versioning(name, version_update)
             changed = True
+        lifecycle_changed = reconcile_lifecycle(client, name, rules, exists, module.check_mode)
     except Exception as error:
         fail_from_exception(module, error, changed=changed and not module.check_mode)
-    module.exit_json(changed=changed, bucket=bucket)
+    module.exit_json(changed=changed or lifecycle_changed, bucket=bucket)
 
 
 def main():
@@ -164,6 +172,7 @@ def main():
             "region": {"type": "str"},
             "object_lock": {"type": "bool", "default": False},
             "versioning": {"type": "str", "choices": ["enabled", "suspended", "disabled"]},
+            "lifecycle_rules": rules_argument_spec(),
             "quota_bytes": {"type": "int", "default": 0},
             "state": {"type": "str", "choices": ["present", "absent"], "default": "present"},
         },
