@@ -16,6 +16,7 @@
     region: "{{ item.region | default(omit) }}"
     object_lock: "{{ item.object_lock | default(false) }}"
     versioning: "{{ item.versioning | default(omit) }}"
+    lifecycle_rules: "{{ item.lifecycle_rules | default(omit) }}"
     quota_bytes: "{{ item.quota_bytes | default(omit) }}"
     state: "{{ item.state | default('present') }}"
   loop: "{{ aistor_admin_buckets }}"

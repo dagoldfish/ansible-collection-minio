@@ -6,7 +6,7 @@ LDAP and webhook modules add narrowly scoped signed adapters for the dedicated
 IDP Admin API and configuration activation headers not exposed by minio-py 7.2.20.
 
 The collection is aimed at operators who want declarative, reviewable AIStor
-administration. It includes eleven modules and the `aistor_admin` role, which
+administration. It includes twelve modules and the `aistor_admin` role, which
 applies them in a safe dependency order.
 
 ## Install
@@ -96,7 +96,8 @@ resources while remaining disabled unless `AISTOR_MANAGE=true`.
 
 | Content | Purpose |
 | --- | --- |
-| `minio_bucket` | Create buckets, manage storage quotas and versioning, and remove empty buckets |
+| `minio_bucket` | Create buckets, manage quotas, versioning, and lifecycle rules, and remove empty buckets |
+| `minio_bucket_lifecycle` | Reconcile named lifecycle rules on an existing bucket independently of quota management |
 | `minio_user` | Create, rotate, enable, disable, and remove local users |
 | `minio_group` | Manage local groups, membership, and status |
 | `minio_ldap_provider` | Reconcile default and named LDAP identity providers |

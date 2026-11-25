@@ -6,6 +6,8 @@ All notable changes to `dagoldfish.minio` are documented in this file.
 
 ### Added
 
+- Add ID-based lifecycle rules to bucket tasks and role entries. Use
+  `minio_bucket_lifecycle` to manage rules independently.
 - Add opt-in `versioning` to bucket tasks and role entries. Omitted versioning
   requires no additional permissions.
 - Add optional `quota_bytes` to `minio_bucket` and the role's `aistor_admin_buckets`
