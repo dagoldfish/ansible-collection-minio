@@ -419,7 +419,7 @@ def _api_error_message(details: dict[str, Any]) -> str:
     return f"{details['type']}: " + ", ".join(values)
 
 
-def fail_from_exception(module: Any, error: Exception) -> None:
+def fail_from_exception(module: Any, error: Exception, *, changed: bool = False) -> None:
     """Return an API failure without exposing request credentials."""
     params = module.params if isinstance(module.params, dict) else {}
     sensitive_values = _sensitive_values(params) + list(getattr(module, "no_log_values", ()))
@@ -432,6 +432,8 @@ def fail_from_exception(module: Any, error: Exception) -> None:
     result = {"msg": f"MinIO AIStor API request failed: {message}"}
     if details:
         result["api_error"] = details
+    if changed:
+        result["changed"] = True
     module.fail_json(**result)
 
 

@@ -2,6 +2,15 @@
 
 All notable changes to `dagoldfish.minio` are documented in this file.
 
+## Unreleased
+
+### Added
+
+- Add optional `quota_bytes` to `minio_bucket` and the role's `aistor_admin_buckets`
+  entries to set or clear hard storage quotas on new and existing buckets.
+  Omission defaults to unlimited and clears any existing limit. Existing bucket
+  tasks need `admin:GetBucketQuota` to read a quota and `admin:SetBucketQuota` to change it.
+
 ## 0.3.0 - 2026-09-09
 
 ### Added
