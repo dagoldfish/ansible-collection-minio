@@ -94,8 +94,9 @@ def _signature(element):
 
 def reconcile_lifecycle(client, name, desired, exists, check_mode):
     from minio.error import S3Error
-    from minio.helpers import md5sum_hash
+    from minio.helpers import check_bucket_name, md5sum_hash
 
+    check_bucket_name(name, s3_check=client._base_url.is_aws_host)
     if not desired:
         return False
     root = ET.Element("{http://s3.amazonaws.com/doc/2006-03-01/}LifecycleConfiguration")
