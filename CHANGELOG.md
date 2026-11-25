@@ -6,6 +6,8 @@ All notable changes to `dagoldfish.minio` are documented in this file.
 
 ### Added
 
+- Add opt-in `versioning` to bucket tasks and role entries. Omitted versioning
+  requires no additional permissions.
 - Add optional `quota_bytes` to `minio_bucket` and the role's `aistor_admin_buckets`
   entries to set or clear hard storage quotas on new and existing buckets.
   Omission defaults to unlimited and clears any existing limit. Existing bucket

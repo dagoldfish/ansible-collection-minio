@@ -96,7 +96,7 @@ resources while remaining disabled unless `AISTOR_MANAGE=true`.
 
 | Content | Purpose |
 | --- | --- |
-| `minio_bucket` | Create buckets, manage storage quotas, and remove empty buckets |
+| `minio_bucket` | Create buckets, manage storage quotas and versioning, and remove empty buckets |
 | `minio_user` | Create, rotate, enable, disable, and remove local users |
 | `minio_group` | Manage local groups, membership, and status |
 | `minio_ldap_provider` | Reconcile default and named LDAP identity providers |

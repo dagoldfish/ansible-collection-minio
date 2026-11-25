@@ -1405,3 +1405,44 @@ def test_replication_info_reads_optional_status(monkeypatch):
         "site_replication": {"enabled": True, "sites": []},
         "status": {"healthy": True},
     }
+
+
+@pytest.mark.parametrize("check", [False, True])
+def test_bucket_versioning_preserves_exclusions(monkeypatch, check):
+    from minio.versioningconfig import VersioningConfig
+
+    mod = importlib.import_module(f"{BASE}.minio_bucket")
+    admin = Mock()
+    admin.bucket_quota_get.return_value = "{}"
+    monkeypatch.setattr(mod, "admin_client", lambda module: admin)
+    client = Mock()
+    config = VersioningConfig("Enabled", excluded_prefixes=["tmp/"], exclude_folders=True)
+    client.get_bucket_versioning.return_value = config
+    params = dict(name="backups", state="present", object_lock=False, region=None, versioning="enabled")
+    assert not result(mod.run, Module(params, check), client)["changed"]
+    params["versioning"] = "suspended"
+    assert result(mod.run, Module(params, check), client)["changed"]
+    if check:
+        client.set_bucket_versioning.assert_not_called()
+    else:
+        client.set_bucket_versioning.assert_called_once_with(
+            "backups", VersioningConfig("Suspended", excluded_prefixes=["tmp/"], exclude_folders=True)
+        )
+
+
+def test_new_bucket_versioning():
+    from minio.versioningconfig import VersioningConfig
+
+    mod = importlib.import_module(f"{BASE}.minio_bucket")
+    client = Mock()
+    client.bucket_exists.return_value = False
+    params = dict(name="backups", state="present", region=None, object_lock=False, versioning="enabled")
+    assert result(mod.run, Module(params, True), client)["changed"]
+    client.set_bucket_versioning.assert_not_called()
+    assert result(mod.run, Module(params), client)["changed"]
+    client.set_bucket_versioning.assert_called_once_with("backups", VersioningConfig("Enabled"))
+    client.get_bucket_versioning.assert_not_called()
+    params.update(object_lock=True, versioning="suspended")
+    with pytest.raises(FailJson, match="object-locked"):
+        mod.run(Module(params), client)
+    assert client.make_bucket.call_count == 1

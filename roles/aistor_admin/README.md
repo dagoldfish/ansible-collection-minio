@@ -113,7 +113,7 @@ Vault, environment lookups, or a dedicated secret provider.
 
 ### Buckets
 
-Each `aistor_admin_buckets` item accepts `name`, `region`, `object_lock`, `quota_bytes`, and
+Each `aistor_admin_buckets` item accepts `name`, `region`, `object_lock`, `quota_bytes`, `versioning`, and
 `state` (`present` by default). Region and object-lock settings apply only when
 creating a bucket and are not changed on an existing bucket. `state: absent`
 removes only an empty bucket; the SDK returns an error rather than deleting
@@ -130,7 +130,13 @@ AIStor excludes S3 Express One Zone mode. [AIStor bucket quotas](https://docs.mi
 aistor_admin_buckets:
   - name: backups
     quota_bytes: 10737418240  # 10 GiB
+    versioning: enabled
 ```
+
+Omit `versioning` to leave it unmanaged. Use `enabled` to start versioning
+or `suspended` to suspend it on an eligible bucket. Suspending preserves
+existing versions. Object-locked buckets require enabled versioning.
+Versioning uses `s3:GetBucketVersioning` and `s3:PutBucketVersioning`.
 
 ### Policies
 
