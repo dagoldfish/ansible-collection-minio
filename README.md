@@ -20,7 +20,7 @@ ansible-galaxy collection install dagoldfish.minio
 To install this release, pin its exact version:
 
 ```sh
-ansible-galaxy collection install 'dagoldfish.minio:==0.3.0'
+ansible-galaxy collection install 'dagoldfish.minio:==0.4.0'
 ```
 
 Or pin it in your collection requirements:
@@ -28,7 +28,7 @@ Or pin it in your collection requirements:
 ```yaml
 collections:
   - name: dagoldfish.minio
-    version: '0.3.0'
+    version: '0.4.0'
 ```
 
 Automatic configuration restarts remain opt-in; see the
