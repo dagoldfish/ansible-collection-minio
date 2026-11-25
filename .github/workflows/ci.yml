@@ -26,7 +26,8 @@ jobs:
         run: ./scripts/validate.sh
 
   minimum-supported:
-    runs-on: ubuntu-latest
+    # setup-python provides Python 3.9 for this runner image.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v6
         with:
