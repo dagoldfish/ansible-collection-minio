@@ -107,3 +107,13 @@ def test_rule_id_limit_counts_utf8_bytes():
     assert identifier in desired_rules([dict(id=identifier, expiration_days=1)])
     with pytest.raises(ValueError, match="255 UTF-8 bytes"):
         desired_rules([dict(id=identifier + "b", expiration_days=1)])
+
+
+@pytest.mark.parametrize("check", [False, True])
+def test_invalid_bucket_name_rejected_before_any_request(check):
+    client = Mock()
+    rules = desired_rules([dict(id="expire", expiration_days=2)])
+    with pytest.raises(ValueError, match="invalid bucket name"):
+        reconcile_lifecycle(client, "backups/", rules, True, check)
+    client._execute.assert_not_called()
+    client.delete_bucket_lifecycle.assert_not_called()
