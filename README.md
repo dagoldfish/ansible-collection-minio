@@ -6,7 +6,7 @@ LDAP and webhook modules add narrowly scoped signed adapters for the dedicated
 IDP Admin API and configuration activation headers not exposed by minio-py 7.2.20.
 
 The collection is aimed at operators who want declarative, reviewable AIStor
-administration. It includes eleven modules and the `aistor_admin` role, which
+administration. It includes twelve modules and the `aistor_admin` role, which
 applies them in a safe dependency order.
 
 ## Install
@@ -20,7 +20,7 @@ ansible-galaxy collection install dagoldfish.minio
 To install this release, pin its exact version:
 
 ```sh
-ansible-galaxy collection install 'dagoldfish.minio:==0.3.0'
+ansible-galaxy collection install 'dagoldfish.minio:==0.4.0'
 ```
 
 Or pin it in your collection requirements:
@@ -28,7 +28,7 @@ Or pin it in your collection requirements:
 ```yaml
 collections:
   - name: dagoldfish.minio
-    version: '0.3.0'
+    version: '0.4.0'
 ```
 
 Automatic configuration restarts remain opt-in; see the
@@ -96,7 +96,8 @@ resources while remaining disabled unless `AISTOR_MANAGE=true`.
 
 | Content | Purpose |
 | --- | --- |
-| `minio_bucket` | Create buckets and remove empty buckets |
+| `minio_bucket` | Create buckets, manage quotas, versioning, and lifecycle rules, and remove empty buckets |
+| `minio_bucket_lifecycle` | Reconcile named lifecycle rules on an existing bucket independently of quota management |
 | `minio_user` | Create, rotate, enable, disable, and remove local users |
 | `minio_group` | Manage local groups, membership, and status |
 | `minio_ldap_provider` | Reconcile default and named LDAP identity providers |
@@ -120,6 +121,8 @@ so shared module defaults can be defined once when appropriate.
 
 ## Behavior and limitations
 
+- For buckets managed with `state: present`, `quota_bytes` defaults to `0`
+  (unlimited). Declare any existing limit you want to keep before upgrading.
 - Bucket region and object-lock settings apply only at creation. Existing
   buckets are preserved, and deletion fails safely when a bucket is not empty.
 - Existing unreadable user and service-account secrets are preserved. Set

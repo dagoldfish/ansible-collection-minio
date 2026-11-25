@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import importlib
+from unittest.mock import Mock
 
 import pytest
+from minio import MinioAdmin
 from minio.error import MinioAdminException
 from urllib3.exceptions import MaxRetryError, ResponseError
 
@@ -56,23 +58,33 @@ class Buckets:
         self.calls.append(("remove", name))
 
 
-def test_bucket_create_and_existing_noop():
+def test_bucket_create_and_existing_noop(monkeypatch):
     mod = importlib.import_module(f"{BASE}.minio_bucket")
     params = {"name": "backups", "region": "eu-west-1", "object_lock": True, "state": "present"}
     client = Buckets()
     out = result(mod.run, Module(params), client)
     assert out == {
         "changed": True,
-        "bucket": {"name": "backups", "region": "eu-west-1", "object_lock": True},
+        "bucket": {"name": "backups", "region": "eu-west-1", "object_lock": True, "quota_bytes": 0},
     }
     assert client.calls == [
         ("exists", "backups"),
         ("create", "backups", {"location": "eu-west-1", "object_lock": True}),
     ]
 
+    admin = Mock(spec=MinioAdmin)
+    admin.bucket_quota_get.return_value = "{}"
+    monkeypatch.setattr(mod, "admin_client", lambda module: admin)
     existing = Buckets(True)
     assert result(mod.run, Module(params), existing)["changed"] is False
     assert existing.calls == [("exists", "backups")]
+    admin.bucket_quota_set.assert_not_called()
+
+    admin.bucket_quota_get.return_value = '{"size":100}'
+    assert result(mod.run, Module(params, True), existing)["changed"] is True
+    admin.bucket_quota_set.assert_not_called()
+    assert result(mod.run, Module(params), existing)["changed"] is True
+    admin.bucket_quota_set.assert_called_once_with("backups", 0)
 
 
 def test_bucket_check_mode_predicts_without_mutating():
@@ -93,6 +105,63 @@ def test_bucket_remove_and_absent_noop():
     missing = Buckets()
     assert result(mod.run, Module(params), missing)["changed"] is False
     assert missing.calls == [("exists", "backups")]
+
+
+@pytest.mark.parametrize("exists, current, desired, check, changed, writes", [
+    (False, None, 100, False, True, True),
+    (False, None, 100, True, True, False),
+    (False, None, 0, False, True, False),
+    (True, "{}", 100, False, True, True),
+    (True, '{"size":100,"quota":50}', 100, False, False, False),
+    (True, '{"size":0,"quota":100}', 100, True, False, False),
+    (True, '{"size":50}', 100, True, True, False),
+    (True, '{"size":50}', 100, False, True, True),
+    (True, '{"quota":100}', 0, False, True, True),
+    (True, "{}", 0, False, False, False),
+])
+def test_bucket_quota(monkeypatch, exists, current, desired, check, changed, writes):
+    mod = importlib.import_module(f"{BASE}.minio_bucket")
+    admin = Mock(spec=MinioAdmin)
+    admin.bucket_quota_get.return_value = current
+    monkeypatch.setattr(mod, "admin_client", lambda module: admin)
+    params = {"name": "backups", "region": None, "object_lock": False, "state": "present", "quota_bytes": desired}
+    client = Buckets(exists)
+    out = result(mod.run, Module(params, check), client)
+    assert out["changed"] is changed
+    assert out["bucket"]["quota_bytes"] == desired
+    if exists:
+        admin.bucket_quota_get.assert_called_once_with("backups")
+    else:
+        admin.bucket_quota_get.assert_not_called()
+    if writes:
+        admin.bucket_quota_set.assert_called_once_with("backups", desired)
+    else:
+        admin.bucket_quota_set.assert_not_called()
+    assert [call[0] for call in client.calls] == (["exists", "create"] if not exists and not check else ["exists"])
+
+
+def test_new_bucket_quota_failure_reports_creation(monkeypatch):
+    mod = importlib.import_module(f"{BASE}.minio_bucket")
+    admin = Mock(spec=MinioAdmin)
+    admin.bucket_quota_set.side_effect = ValueError("quota update failed")
+    monkeypatch.setattr(mod, "admin_client", lambda module: admin)
+    params = {"name": "backups", "region": None, "object_lock": False, "state": "present", "quota_bytes": 100}
+    client = Buckets()
+    with pytest.raises(FailJson) as caught:
+        mod.run(Module(params), client)
+    assert caught.value.args[0]["changed"] is True
+    assert "quota update failed" in caught.value.args[0]["msg"]
+    assert client.calls[-1][0] == "create"
+
+
+@pytest.mark.parametrize("quota", [-1, 2**64])
+def test_invalid_bucket_quota_fails_before_creation(quota):
+    mod = importlib.import_module(f"{BASE}.minio_bucket")
+    params = {"name": "backups", "region": None, "object_lock": False, "state": "present", "quota_bytes": quota}
+    client = Buckets()
+    with pytest.raises(FailJson, match="quota_bytes"):
+        mod.run(Module(params), client)
+    assert client.calls == [("exists", "backups")]
 
 
 class Users:
@@ -1336,3 +1405,56 @@ def test_replication_info_reads_optional_status(monkeypatch):
         "site_replication": {"enabled": True, "sites": []},
         "status": {"healthy": True},
     }
+
+
+@pytest.mark.parametrize("check", [False, True])
+@pytest.mark.parametrize("requested", ["disabled", "suspended"])
+def test_bucket_refuses_to_turn_off_enabled_versioning(monkeypatch, check, requested):
+    from minio.versioningconfig import VersioningConfig
+
+    mod = importlib.import_module(f"{BASE}.minio_bucket")
+    admin = Mock()
+    monkeypatch.setattr(mod, "admin_client", admin)
+    client = Mock()
+    client.bucket_exists.return_value = True
+    client.get_bucket_versioning.return_value = VersioningConfig("Enabled", excluded_prefixes=["tmp/"])
+    params = dict(name="backups", state="present", object_lock=False, region=None, versioning=requested, quota_bytes=100)
+    with pytest.raises(FailJson, match="Unable to turn off versioning on a bucket that already has it enabled"):
+        mod.run(Module(params, check), client)
+    client.set_bucket_versioning.assert_not_called()
+    admin.assert_not_called()
+
+
+@pytest.mark.parametrize("requested,current", [
+    ("disabled", None), ("disabled", "Suspended"), ("enabled", "Enabled"), ("suspended", "Suspended"),
+])
+def test_bucket_versioning_already_satisfied(monkeypatch, requested, current):
+    from minio.versioningconfig import VersioningConfig
+
+    mod = importlib.import_module(f"{BASE}.minio_bucket")
+    admin = Mock()
+    admin.bucket_quota_get.return_value = "{}"
+    monkeypatch.setattr(mod, "admin_client", lambda module: admin)
+    client = Mock()
+    client.get_bucket_versioning.return_value = VersioningConfig(current)
+    params = dict(name="backups", state="present", object_lock=False, region=None, versioning=requested)
+    assert not result(mod.run, Module(params), client)["changed"]
+    client.set_bucket_versioning.assert_not_called()
+
+
+def test_new_bucket_versioning():
+    from minio.versioningconfig import VersioningConfig
+
+    mod = importlib.import_module(f"{BASE}.minio_bucket")
+    client = Mock()
+    client.bucket_exists.return_value = False
+    params = dict(name="backups", state="present", region=None, object_lock=False, versioning="enabled")
+    assert result(mod.run, Module(params, True), client)["changed"]
+    client.set_bucket_versioning.assert_not_called()
+    assert result(mod.run, Module(params), client)["changed"]
+    client.set_bucket_versioning.assert_called_once_with("backups", VersioningConfig("Enabled"))
+    client.get_bucket_versioning.assert_not_called()
+    params.update(object_lock=True, versioning="suspended")
+    with pytest.raises(FailJson, match="object-locked"):
+        mod.run(Module(params), client)
+    assert client.make_bucket.call_count == 1

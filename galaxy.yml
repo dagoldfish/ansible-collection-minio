@@ -1,7 +1,7 @@
 ---
 namespace: dagoldfish
 name: minio
-version: 0.3.0
+version: 0.4.0
 readme: README.md
 authors:
   - Geoffrey Burger (@dagoldfish)
@@ -20,6 +20,7 @@ documentation: https://github.com/dagoldfish/ansible-collection-minio#readme
 homepage: https://github.com/dagoldfish/ansible-collection-minio
 issues: https://github.com/dagoldfish/ansible-collection-minio/issues
 build_ignore:
+  - AGENTS.md
   - .agents
   - .ansible
   - .codex

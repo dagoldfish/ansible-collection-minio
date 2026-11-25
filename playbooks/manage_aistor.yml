@@ -13,6 +13,10 @@
       validate_certs: true
     aistor_admin_buckets:
       - name: example
+        versioning: enabled
+        lifecycle_rules:
+          - id: expire-old-versions
+            noncurrent_expiration_days: 30
       - name: example-archive
         region: eu-west-1
         object_lock: true
