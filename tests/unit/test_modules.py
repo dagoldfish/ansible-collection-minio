@@ -1408,7 +1408,26 @@ def test_replication_info_reads_optional_status(monkeypatch):
 
 
 @pytest.mark.parametrize("check", [False, True])
-def test_bucket_versioning_preserves_exclusions(monkeypatch, check):
+@pytest.mark.parametrize("requested", ["disabled", "suspended"])
+def test_bucket_refuses_to_turn_off_enabled_versioning(monkeypatch, check, requested):
+    from minio.versioningconfig import VersioningConfig
+
+    mod = importlib.import_module(f"{BASE}.minio_bucket")
+    admin = Mock()
+    monkeypatch.setattr(mod, "admin_client", admin)
+    client = Mock()
+    client.bucket_exists.return_value = True
+    client.get_bucket_versioning.return_value = VersioningConfig("Enabled", excluded_prefixes=["tmp/"])
+    params = dict(name="backups", state="present", object_lock=False, region=None, versioning=requested, quota_bytes=100)
+    with pytest.raises(FailJson, match="Unable to turn off versioning on a bucket that already has it enabled"):
+        mod.run(Module(params, check), client)
+    client.set_bucket_versioning.assert_not_called()
+    admin.assert_not_called()
+
+
+@pytest.mark.parametrize("requested,current", [("disabled", None), ("disabled", "Suspended"),
+                                              ("enabled", "Enabled"), ("suspended", "Suspended")])
+def test_bucket_versioning_already_satisfied(monkeypatch, requested, current):
     from minio.versioningconfig import VersioningConfig
 
     mod = importlib.import_module(f"{BASE}.minio_bucket")
@@ -1416,18 +1435,10 @@ def test_bucket_versioning_preserves_exclusions(monkeypatch, check):
     admin.bucket_quota_get.return_value = "{}"
     monkeypatch.setattr(mod, "admin_client", lambda module: admin)
     client = Mock()
-    config = VersioningConfig("Enabled", excluded_prefixes=["tmp/"], exclude_folders=True)
-    client.get_bucket_versioning.return_value = config
-    params = dict(name="backups", state="present", object_lock=False, region=None, versioning="enabled")
-    assert not result(mod.run, Module(params, check), client)["changed"]
-    params["versioning"] = "suspended"
-    assert result(mod.run, Module(params, check), client)["changed"]
-    if check:
-        client.set_bucket_versioning.assert_not_called()
-    else:
-        client.set_bucket_versioning.assert_called_once_with(
-            "backups", VersioningConfig("Suspended", excluded_prefixes=["tmp/"], exclude_folders=True)
-        )
+    client.get_bucket_versioning.return_value = VersioningConfig(current)
+    params = dict(name="backups", state="present", object_lock=False, region=None, versioning=requested)
+    assert not result(mod.run, Module(params), client)["changed"]
+    client.set_bucket_versioning.assert_not_called()
 
 
 def test_new_bucket_versioning():

@@ -32,7 +32,13 @@ options:
   name: {description: Bucket name., type: str, required: true}
   region: {description: Region used when creating the bucket., type: str}
   object_lock: {description: Enable object locking when creating the bucket., type: bool, default: false}
-  versioning: {description: Set bucket versioning. Omit to preserve its current state., type: str, choices: [enabled, suspended]}
+  versioning:
+    description:
+      - Enable versioning, request suspension, or use V(disabled) to require that versioning is inactive.
+      - Once versioning is enabled, this module rejects requests to suspend or disable it.
+      - Omit to preserve the current state.
+    type: str
+    choices: [enabled, suspended, disabled]
   quota_bytes:
     description:
       - Hard storage quota in bytes for a new or existing bucket when O(state=present).
@@ -118,10 +124,21 @@ def run(module, client):
 
     bucket["quota_bytes"] = quota
     versioning = module.params.get("versioning")
+    version_update = None
     if versioning:
+        from minio.versioningconfig import VersioningConfig
+
         bucket["versioning"] = versioning
-    if not exists and bucket["object_lock"] and versioning == "suspended":
-        module.fail_json(msg="A new object-locked bucket requires enabled versioning.")
+        if exists:
+            current_version = client.get_bucket_versioning(name)
+        else:
+            current_version = VersioningConfig(status="Enabled" if bucket["object_lock"] else None)
+        if current_version.status == "Enabled" and versioning != "enabled":
+            if not exists:
+                module.fail_json(msg="A new object-locked bucket requires enabled versioning.")
+            module.fail_json(msg="Unable to turn off versioning on a bucket that already has it enabled.")
+        if versioning != "disabled" and current_version.status != versioning.title():
+            version_update = replace(current_version, status=versioning.title())
     rules = desired_rules(module.params.get("lifecycle_rules"))
     changed = False
     try:
@@ -137,16 +154,10 @@ def run(module, client):
                 if not module.check_mode:
                     admin.bucket_quota_set(name, quota)
                 changed = True
-        if versioning:
-            from minio.versioningconfig import VersioningConfig
-
-            current_version = client.get_bucket_versioning(name) if exists else VersioningConfig(
-                status="Enabled" if bucket["object_lock"] else None
-            )
-            if current_version.status != versioning.title():
-                if not module.check_mode:
-                    client.set_bucket_versioning(name, replace(current_version, status=versioning.title()))
-                changed = True
+        if version_update is not None:
+            if not module.check_mode:
+                client.set_bucket_versioning(name, version_update)
+            changed = True
         lifecycle_changed = reconcile_lifecycle(client, name, rules, exists, module.check_mode)
     except Exception as error:
         fail_from_exception(module, error, changed=changed and not module.check_mode)
@@ -160,7 +171,7 @@ def main():
             "name": {"type": "str", "required": True},
             "region": {"type": "str"},
             "object_lock": {"type": "bool", "default": False},
-            "versioning": {"type": "str", "choices": ["enabled", "suspended"]},
+            "versioning": {"type": "str", "choices": ["enabled", "suspended", "disabled"]},
             "lifecycle_rules": rules_argument_spec(),
             "quota_bytes": {"type": "int", "default": 0},
             "state": {"type": "str", "choices": ["present", "absent"], "default": "present"},
