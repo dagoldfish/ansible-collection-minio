@@ -133,9 +133,11 @@ aistor_admin_buckets:
     versioning: enabled
 ```
 
-Omit `versioning` to leave it unmanaged. Use `enabled` to start versioning
-or `suspended` to suspend it on an eligible bucket. Suspending preserves
-existing versions. Object-locked buckets require enabled versioning.
+Use `versioning: enabled` to start versioning, or omit the option to leave it
+unmanaged. Use `disabled` to require that versioning is inactive. An unversioned
+or already suspended bucket satisfies that requirement. On an enabled bucket,
+both `disabled` and `suspended` fail before the module writes any bucket settings,
+including in check mode. Object-locked buckets require enabled versioning.
 Versioning uses `s3:GetBucketVersioning` and `s3:PutBucketVersioning`.
 
 ### Policies
