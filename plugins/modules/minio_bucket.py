@@ -31,6 +31,13 @@ options:
   name: {description: Bucket name., type: str, required: true}
   region: {description: Region used when creating the bucket., type: str}
   object_lock: {description: Enable object locking when creating the bucket., type: bool, default: false}
+  versioning:
+    description:
+      - Enable versioning, request suspension, or use V(disabled) to require that versioning is inactive.
+      - Once versioning is enabled, this module rejects requests to suspend or disable it.
+      - Omit to preserve the current state.
+    type: str
+    choices: [enabled, suspended, disabled]
   quota_bytes:
     description:
       - Hard storage quota in bytes for a new or existing bucket when O(state=present).
@@ -41,7 +48,7 @@ options:
 author: [Geoffrey Burger (@dagoldfish)]
 requirements: [minio >= 7.2.20]
 attributes:
-  check_mode: {support: full, description: "Predicts bucket creation, removal, and quota changes."}
+  check_mode: {support: full, description: "Predicts bucket creation, removal, quota, and versioning changes."}
 """
 
 EXAMPLES = r"""
@@ -77,6 +84,8 @@ bucket:
   type: dict
 """
 
+from dataclasses import replace
+
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.dagoldfish.minio.plugins.module_utils.minio_admin import (
     admin_client,
@@ -108,23 +117,42 @@ def run(module, client):
         module.fail_json(msg="quota_bytes must be between 0 and 18446744073709551615 bytes.")
 
     bucket["quota_bytes"] = quota
-    if not exists:
-        if not module.check_mode:
-            client.make_bucket(name, location=module.params["region"], object_lock=module.params["object_lock"])
-            if quota:
-                try:
-                    admin_client(module).bucket_quota_set(name, quota)
-                except Exception as error:
-                    fail_from_exception(module, error, changed=True)
-        module.exit_json(changed=True, bucket=bucket)
+    versioning = module.params.get("versioning")
+    version_update = None
+    if versioning:
+        from minio.versioningconfig import VersioningConfig
 
-    admin = admin_client(module)
-    current = parse_json(admin.bucket_quota_get(name)) or {}
-    # MinIO uses the legacy quota field when size is zero.
-    current_size = current.get("size") or current.get("quota", 0)
-    changed = current_size != quota
-    if changed and not module.check_mode:
-        admin.bucket_quota_set(name, quota)
+        bucket["versioning"] = versioning
+        if exists:
+            current_version = client.get_bucket_versioning(name)
+        else:
+            current_version = VersioningConfig(status="Enabled" if bucket["object_lock"] else None)
+        if current_version.status == "Enabled" and versioning != "enabled":
+            if not exists:
+                module.fail_json(msg="A new object-locked bucket requires enabled versioning.")
+            module.fail_json(msg="Unable to turn off versioning on a bucket that already has it enabled.")
+        if versioning != "disabled" and current_version.status != versioning.title():
+            version_update = replace(current_version, status=versioning.title())
+    changed = False
+    try:
+        if not exists:
+            if not module.check_mode:
+                client.make_bucket(name, location=bucket["region"], object_lock=bucket["object_lock"])
+            changed = True
+        if exists or quota:
+            admin = admin_client(module)
+            current = (parse_json(admin.bucket_quota_get(name)) or {}) if exists else {}
+            # MinIO uses the legacy quota field when size is zero.
+            if (current.get("size") or current.get("quota", 0)) != quota:
+                if not module.check_mode:
+                    admin.bucket_quota_set(name, quota)
+                changed = True
+        if version_update is not None:
+            if not module.check_mode:
+                client.set_bucket_versioning(name, version_update)
+            changed = True
+    except Exception as error:
+        fail_from_exception(module, error, changed=changed and not module.check_mode)
     module.exit_json(changed=changed, bucket=bucket)
 
 
@@ -135,6 +163,7 @@ def main():
             "name": {"type": "str", "required": True},
             "region": {"type": "str"},
             "object_lock": {"type": "bool", "default": False},
+            "versioning": {"type": "str", "choices": ["enabled", "suspended", "disabled"]},
             "quota_bytes": {"type": "int", "default": 0},
             "state": {"type": "str", "choices": ["present", "absent"], "default": "present"},
         },
