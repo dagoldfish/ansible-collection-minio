@@ -63,7 +63,7 @@ safe by default because `aistor_admin_manage` is `false`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| [`aistor_admin_buckets`](#buckets) | `[]` | Buckets to create or remove |
+| [`aistor_admin_buckets`](#buckets) | `[]` | Buckets and storage quotas to manage |
 | [`aistor_admin_policies`](#policies) | `[]` | IAM policies to reconcile |
 | [`aistor_admin_users`](#users) | `[]` | Local users to reconcile |
 | [`aistor_admin_groups`](#groups) | `[]` | Local groups and memberships to reconcile |
@@ -113,11 +113,24 @@ Vault, environment lookups, or a dedicated secret provider.
 
 ### Buckets
 
-Each `aistor_admin_buckets` item accepts `name`, `region`, `object_lock`, and
+Each `aistor_admin_buckets` item accepts `name`, `region`, `object_lock`, `quota_bytes`, and
 `state` (`present` by default). Region and object-lock settings apply only when
 creating a bucket and are not changed on an existing bucket. `state: absent`
 removes only an empty bucket; the SDK returns an error rather than deleting
 objects from a non-empty bucket.
+
+Set `quota_bytes` to enforce a hard storage quota on a new or existing bucket.
+Omitting the field or setting it to `0` clears any existing limit. To keep a
+limit set outside Ansible, include its size in the bucket definition. Managing a quota
+requires `admin:GetBucketQuota` and `admin:SetBucketQuota`.
+Quota reconciliation requires an AIStor mode that supports bucket quotas.
+AIStor excludes S3 Express One Zone mode. [AIStor bucket quotas](https://docs.min.io/aistor/administration/bucket-quotas/)
+
+```yaml
+aistor_admin_buckets:
+  - name: backups
+    quota_bytes: 10737418240  # 10 GiB
+```
 
 ### Policies
 

@@ -31,11 +31,17 @@ options:
   name: {description: Bucket name., type: str, required: true}
   region: {description: Region used when creating the bucket., type: str}
   object_lock: {description: Enable object locking when creating the bucket., type: bool, default: false}
+  quota_bytes:
+    description:
+      - Hard storage quota in bytes for a new or existing bucket when O(state=present).
+      - The default of C(0) means unlimited and clears any existing quota.
+    type: int
+    default: 0
   state: {description: Desired bucket existence., type: str, choices: [present, absent], default: present}
 author: [Geoffrey Burger (@dagoldfish)]
 requirements: [minio >= 7.2.20]
 attributes:
-  check_mode: {support: full, description: "Predicts bucket creation and removal."}
+  check_mode: {support: full, description: "Predicts bucket creation, removal, and quota changes."}
 """
 
 EXAMPLES = r"""
@@ -51,6 +57,12 @@ EXAMPLES = r"""
     region: eu-west-1
     object_lock: true
 
+- name: Set a 10 GiB storage quota
+  dagoldfish.minio.minio_bucket:
+    auth: "{{ aistor_auth }}"
+    name: backups
+    quota_bytes: 10737418240
+
 - name: Remove an empty bucket
   dagoldfish.minio.minio_bucket:
     auth: "{{ aistor_auth }}"
@@ -60,15 +72,17 @@ EXAMPLES = r"""
 
 RETURN = r"""
 bucket:
-  description: Bucket identity and creation settings requested by the module.
+  description: Bucket identity and requested settings, including C(quota_bytes) when managed.
   returned: always
   type: dict
 """
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.dagoldfish.minio.plugins.module_utils.minio_admin import (
+    admin_client,
     auth_argument_spec,
     fail_from_exception,
+    parse_json,
     s3_client,
 )
 
@@ -89,11 +103,29 @@ def run(module, client):
             client.remove_bucket(name)
         module.exit_json(changed=True, bucket={"name": name})
 
-    if exists:
-        module.exit_json(changed=False, bucket=bucket)
-    if not module.check_mode:
-        client.make_bucket(name, location=module.params["region"], object_lock=module.params["object_lock"])
-    module.exit_json(changed=True, bucket=bucket)
+    quota = module.params.get("quota_bytes", 0)
+    if not 0 <= quota < 2**64:
+        module.fail_json(msg="quota_bytes must be between 0 and 18446744073709551615 bytes.")
+
+    bucket["quota_bytes"] = quota
+    if not exists:
+        if not module.check_mode:
+            client.make_bucket(name, location=module.params["region"], object_lock=module.params["object_lock"])
+            if quota:
+                try:
+                    admin_client(module).bucket_quota_set(name, quota)
+                except Exception as error:
+                    fail_from_exception(module, error, changed=True)
+        module.exit_json(changed=True, bucket=bucket)
+
+    admin = admin_client(module)
+    current = parse_json(admin.bucket_quota_get(name)) or {}
+    # MinIO uses the legacy quota field when size is zero.
+    current_size = current.get("size") or current.get("quota", 0)
+    changed = current_size != quota
+    if changed and not module.check_mode:
+        admin.bucket_quota_set(name, quota)
+    module.exit_json(changed=changed, bucket=bucket)
 
 
 def main():
@@ -103,6 +135,7 @@ def main():
             "name": {"type": "str", "required": True},
             "region": {"type": "str"},
             "object_lock": {"type": "bool", "default": False},
+            "quota_bytes": {"type": "int", "default": 0},
             "state": {"type": "str", "choices": ["present", "absent"], "default": "present"},
         },
         supports_check_mode=True,
